@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bronchoscopy Simulator</title>
+<style>
+  :root{
+    --bg:#06080b; --panel:#0c1117; --line:#1c2632; --text:#c9d4df; --dim:#6b7c8d;
+    --hr:#3ef07a; --spo2:#3ad7ff; --bp:#ff6b6b; --warn:#ffb020; --accent:#7cf0ff;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+    font:13px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  #app{display:grid;grid-template-columns:270px 1fr 270px;height:100vh;gap:0}
+  aside{background:var(--panel);border-color:var(--line);border-style:solid;border-width:0;
+    padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+  #left{border-right-width:1px} #right{border-left-width:1px}
+  h2{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:0 0 6px;font-weight:600}
+  .card{border:1px solid var(--line);border-radius:8px;padding:10px;background:#0a0e13}
+  #loc{font-size:16px;font-weight:600;color:#fff}
+  #locSub{color:var(--dim);font-size:12px}
+  #mapWrap{position:relative}
+  #minimap{width:100%;height:280px;display:block;background:#05070a;border-radius:6px}
+  #mapLabel{position:absolute;top:6px;left:8px;font-size:10px;color:var(--dim);letter-spacing:.1em}
+  .obj{display:flex;gap:8px;align-items:flex-start;margin:4px 0}
+  .obj .box{width:12px;height:12px;border:1.5px solid var(--dim);border-radius:3px;margin-top:2px;flex:none}
+  .obj.done .box{background:var(--hr);border-color:var(--hr)}
+  .obj.done span{color:var(--dim);text-decoration:line-through}
+  .chips{display:flex;flex-wrap:wrap;gap:4px}
+  .chip{font-size:10px;padding:2px 6px;border-radius:10px;border:1px solid var(--line);color:var(--dim)}
+  .chip.on{background:#123a2a;border-color:var(--hr);color:var(--hr)}
+  .chip.target{border-color:var(--bp);color:var(--bp)}
+  main{position:relative;background:#000;overflow:hidden}
+  #gl,#ov{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #gl{image-rendering:auto}
+  #toast{position:absolute;left:50%;bottom:28px;transform:translateX(-50%);padding:8px 16px;border-radius:20px;
+    background:rgba(10,14,19,.85);border:1px solid var(--line);font-size:14px;opacity:0;transition:opacity .3s;pointer-events:none;white-space:nowrap}
+  #hint{position:absolute;top:12px;left:50%;transform:translateX(-50%);color:var(--dim);font-size:12px;pointer-events:none}
+  .stats{display:grid;grid-template-columns:1fr auto;gap:2px 10px;font-size:12px}
+  .stats b{color:#fff;font-weight:600;text-align:right}
+  #log{font-size:11px;color:var(--dim);max-height:140px;overflow-y:auto}
+  #log div{padding:1px 0} #log .w{color:var(--warn)} #log .g{color:var(--hr)} #log .r{color:var(--bp)}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:12px}
+  kbd{font:11px ui-monospace,Menlo,monospace;background:#1a222c;border:1px solid #2a3542;border-bottom-width:2px;border-radius:4px;padding:0 5px;color:#dfe8f0;white-space:nowrap}
+  .bar{height:6px;background:#1a222c;border-radius:3px;overflow:hidden;margin-top:3px}
+  .bar i{display:block;height:100%;width:0;background:var(--bp);transition:width .2s}
+  .modal{position:fixed;inset:0;background:rgba(3,5,8,.82);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;z-index:10;padding:16px}
+  .modal[hidden]{display:none}
+  .dlg{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 28px;max-width:560px;width:100%;max-height:100%;overflow-y:auto}
+  .dlg h1{margin:0 0 4px;font-size:26px;color:#fff;letter-spacing:-.01em}
+  .dlg h1 em{font-style:normal;color:var(--accent)}
+  .dlg p{color:var(--dim);margin:0 0 14px}
+  .row{margin:12px 0}
+  .row label.t{display:block;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  .seg{display:flex;gap:6px;flex-wrap:wrap}
+  .seg input{display:none}
+  .seg label{padding:8px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer;flex:1;min-width:140px}
+  .seg label small{display:block;color:var(--dim);font-size:11px}
+  .seg input:checked+label{border-color:var(--accent);background:#0f2530}
+  select,input[type=number]{background:#0a0e13;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font:inherit}
+  button.go{margin-top:12px;width:100%;padding:12px;border:0;border-radius:9px;background:var(--accent);color:#04121a;font-weight:700;font-size:15px;cursor:pointer}
+  button.go:hover{filter:brightness(1.1)}
+  button.sec{background:#1a222c;color:var(--text)}
+  .grade{font-size:64px;font-weight:800;color:var(--accent);line-height:1;margin:8px 0}
+  .res{display:grid;grid-template-columns:1fr auto;gap:4px 16px;margin:12px 0}
+  .res b{color:#fff;text-align:right}
+  #phoneCard{display:flex;align-items:center;gap:10px}
+  #phoneDot{width:10px;height:10px;border-radius:50%;background:#3a4654;flex:none}
+  #phoneDot.ok{background:var(--hr);box-shadow:0 0 8px var(--hr)}
+  #phoneTxt{flex:1;font-size:12px;color:var(--dim)}
+  #phoneTxt b{color:var(--text);font-weight:600}
+  .pbtn{background:#1a222c;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
+  .pbtn:hover{border-color:var(--accent)}
+  #qrBox{display:grid;grid-template-columns:200px 1fr;gap:18px;align-items:start;margin-top:10px}
+  #qrImg{width:200px;height:200px;background:#fff;border-radius:10px;padding:6px;color:#333;font-size:12px}
+  #qrImg svg{width:100%;height:100%;display:block}
+  #qrSteps{margin:0;padding-left:18px;color:var(--text);font-size:13px}
+  #qrSteps li{margin-bottom:8px}
+  #qrUrl{font:12px ui-monospace,Menlo,monospace;color:var(--accent);word-break:break-all;user-select:all;margin-top:10px}
+  #pairState{margin-top:14px;font-weight:600}
+  @media (max-width:560px){#qrBox{grid-template-columns:1fr;justify-items:center}}
+  @media (max-width:1000px){
+    #app{grid-template-columns:1fr;grid-template-rows:55vh auto auto;height:auto;min-height:100vh}
+    html,body{overflow:auto}
+    main{grid-row:1} #left{grid-row:2;border-right-width:0;border-top-width:1px} #right{grid-row:3;border-left-width:0;border-top-width:1px}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="left">
+    <div class="card">
+      <h2>Scope location</h2>
+      <div id="loc">—</div>
+      <div id="locSub" class="mono">—</div>
+    </div>
+    <div class="card">
+      <h2>Mission</h2>
+      <div id="objectives"></div>
+    </div>
+    <div class="card">
+      <h2>Phone scope</h2>
+      <div id="phoneCard"><span id="phoneDot"></span><span id="phoneTxt">Not paired</span><button class="pbtn" id="pairBtn">Pair</button></div>
+    </div>
+    <div class="card" id="mapWrap">
+      <h2>Navigation map <span style="float:right" class="mono">[V] view</span></h2>
+      <canvas id="minimap"></canvas>
+    </div>
+  </aside>
+
+  <main id="view">
+    <canvas id="gl"></canvas>
+    <canvas id="ov"></canvas>
+    <div id="hint">Click the view to steer with the mouse · <kbd>P</kbd> pause</div>
+    <div id="toast"></div>
+  </main>
+
+  <aside id="right">
+    <div class="card">
+      <h2>Status</h2>
+      <div class="stats mono">
+        <span>Time</span><b id="stTime">0:00</b>
+        <span>Wall contacts</span><b id="stContacts">0</b>
+        <span>Distance to lesion</span><b id="stDist">—</b>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--dim)">Airway bleeding</div>
+      <div class="bar"><i id="bloodBar"></i></div>
+    </div>
+    <div class="card">
+      <h2>Procedure log</h2>
+      <div id="log" class="mono"></div>
+    </div>
+    <div class="card">
+      <h2>Controls</h2>
+      <div class="keys">
+        <span><kbd>W</kbd>/<kbd>S</kbd> · wheel</span><span>Advance / withdraw</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> · mouse</span><span>Angle scope up / down</span>
+        <span><kbd>←</kbd><kbd>→</kbd> <kbd>A</kbd><kbd>D</kbd></span><span>Steer left / right</span>
+        <span><kbd>Q</kbd>/<kbd>E</kbd></span><span>Rotate scope</span>
+        <span><kbd>Shift</kbd></span><span>Fine control</span>
+        <span><kbd>N</kbd></span><span>Toggle nav guide</span>
+        <span><kbd>V</kbd></span><span>Switch map view</span>
+        <span><kbd>P</kbd></span><span>Pause</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="modal" id="menu">
+  <div class="dlg">
+    <h1>Bronchoscopy <em>Simulator</em></h1>
+    <p>Steer the scope through a procedurally generated bronchial tree to the target without hitting the walls.</p>
+    <div class="row">
+      <label class="t">Mode</label>
+      <div class="seg">
+        <input type="radio" name="mode" id="mBx" value="lesion" checked><label for="mBx">Navigate to lesion<small>Steer the scope to a target lesion</small></label>
+        <input type="radio" name="mode" id="mSv" value="survey"><label for="mSv">Airway survey<small>Inspect all 18 segments</small></label>
+      </div>
+    </div>
+    <div class="row" id="targetRow">
+      <label class="t">Lesion location</label>
+      <select id="targetSel"><option value="random">Random segment</option></select>
+    </div>
+    <div class="row">
+      <label class="t">Difficulty</label>
+      <div class="seg">
+        <input type="radio" name="diff" id="dG" value="guided" checked><label for="dG">Guided<small>Nav pointer, path map, wall assist</small></label>
+        <input type="radio" name="diff" id="dE" value="expert"><label for="dE">Expert<small>Anatomy knowledge only</small></label>
+      </div>
+    </div>
+    <div class="row">
+      <label class="t">Patient anatomy seed</label>
+      <input type="number" id="seed" value="1" min="1" max="99999" style="width:120px">
+      <button class="go sec" id="rndSeed" style="width:auto;padding:7px 12px;margin:0 0 0 6px;font-size:13px">Randomize</button>
+    </div>
+    <button class="go" id="startBtn">Start</button>
+    <button class="go sec" id="pairBtn2">📱 Pair phone as scope handle</button>
+  </div>
+</div>
+
+<div class="modal" id="pairM" hidden>
+  <div class="dlg" style="max-width:600px">
+    <h1>Pair your <em>phone</em></h1>
+    <div id="pairBody"></div>
+    <button class="go sec" id="pairClose">Close</button>
+  </div>
+</div>
+
+<div class="modal" id="pauseM" hidden>
+  <div class="dlg" style="max-width:380px;text-align:center">
+    <h1>Paused</h1>
+    <button class="go" id="resumeBtn">Resume</button>
+    <button class="go sec" id="quitBtn">Abort to menu</button>
+  </div>
+</div>
+
+<div class="modal" id="result" hidden>
+  <div class="dlg" style="max-width:440px">
+    <h1 id="resTitle">Procedure complete</h1>
+    <p id="resSub"></p>
+    <div class="grade" id="resGrade">A</div>
+    <div class="res mono" id="resBody"></div>
+    <button class="go" id="againBtn">New procedure</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script>
+'use strict';
+// ---------- math ----------
+const TAU = Math.PI * 2;
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const norm = a => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+function rot(v, k, ang) {
+  const c = Math.cos(ang), s = Math.sin(ang), kv = cross(k, v), kd = dot(k, v) * (1 - c);
+  return [v[0] * c + kv[0] * s + k[0] * kd, v[1] * c + kv[1] * s + k[1] * kd, v[2] * c + kv[2] * s + k[2] * kd];
+}
+function rng(seed) {
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const smin = (a, b, k) => { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * 0.25; };
+const $ = id => document.getElementById(id);
+
+// ---------- anatomy ----------
+const SEGMENTS = {
+  RB1: 'Apical segment · RUL', RB2: 'Posterior segment · RUL', RB3: 'Anterior segment · RUL',
+  RB4: 'Lateral segment · RML', RB5: 'Medial segment · RML',
+  RB6: 'Superior segment · RLL', RB7: 'Medial basal · RLL', RB8: 'Anterior basal · RLL',
+  RB9: 'Lateral basal · RLL', RB10: 'Posterior basal · RLL',
+  'LB1+2': 'Apicoposterior · LUL', LB3: 'Anterior segment · LUL', LB4: 'Superior lingula', LB5: 'Inferior lingula',
+  LB6: 'Superior segment · LLL', 'LB7+8': 'Anteromedial basal · LLL', LB9: 'Lateral basal · LLL', LB10: 'Posterior basal · LLL'
+};
+const SEG_CODES = Object.keys(SEGMENTS);
+const SMOOTH_K = 1.6;
+let B = [], rand = Math.random;
+
+function perpTo(d) {
+  const t = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  return rot(norm(cross(d, t)), d, rand() * TAU);
+}
+function mk(parent, dir, L, r1, r2, name, o = {}) {
+  const j = o.jit ?? 0.12;
+  const d = norm(add(norm(dir), [(rand() - .5) * j, (rand() - .5) * j, (rand() - .5) * j]));
+  const a = parent ? parent.b.slice() : o.a;
+  const Lr = L * (0.92 + rand() * 0.16);
+  const b = add(a, mul(d, Lr)), ba = sub(b, a);
+  const br = { id: B.length, a, b, ba, L2: dot(ba, ba), len: Lr, dir: d, r1, r2, name, code: o.code || '',
+    parent, children: [], ring: o.ring || 0, level: o.level || 0, seg: o.seg || (parent ? parent.seg : null), tint: rand() };
+  if (parent) parent.children.push(br);
+  B.push(br); return br;
+}
+function subdiv(p, depth) {
+  if (!depth) return;
+  const w = perpTo(p.dir), ang = 0.42 + rand() * 0.2, top = depth === 2;
+  [1, -1].forEach((s, i) => {
+    const a2 = ang * (i ? 1 : 0.75 + rand() * 0.4);
+    const d = add(mul(p.dir, Math.cos(a2)), mul(w, Math.sin(a2) * s));
+    const code = p.code + (top ? (i ? 'b' : 'a') : (i ? '-ii' : '-i'));
+    const c = mk(p, d, top ? 8 + rand() * 3 : 6 + rand() * 3, top ? 2.4 : 1.65, top ? 2.15 : 1.25,
+      top ? 'Subsegmental bronchus' : 'Distal airway (too narrow)', { level: p.level + 1, jit: 0.15, code });
+    subdiv(c, depth - 1);
+  });
+}
+function segment(parent, dir, code) {
+  const s = mk(parent, dir, 12 + rand() * 4, 3.0, 2.75, SEGMENTS[code], { code, level: 1, seg: code, jit: 0.22 });
+  subdiv(s, 2); return s;
+}
+function buildTree(seed) {
+  B = []; rand = rng(seed * 7919 + 13);
+  const T = mk(null, [0, -1, 0], 105, 8.5, 7.6, 'Trachea', { a: [0, 108, 0], ring: .38, jit: 0 });
+  const RMB = mk(T, [-0.55, -0.83, 0.05], 20, 6.6, 6.0, 'Right main bronchus', { ring: .4 });
+  const RUL = mk(RMB, [-0.95, 0.25, -0.1], 11, 4.3, 4.0, 'Right upper lobe bronchus', { ring: .2 });
+  segment(RUL, [-0.15, 1, 0.05], 'RB1'); segment(RUL, [-0.45, 0.35, -1], 'RB2'); segment(RUL, [-0.45, 0, 1], 'RB3');
+  const BI = mk(RMB, [-0.12, -1, 0.05], 24, 5.3, 4.8, 'Bronchus intermedius', { ring: .25 });
+  const RML = mk(BI, [-0.2, -0.45, 1], 11, 3.7, 3.4, 'Right middle lobe bronchus', { ring: .1 });
+  segment(RML, [-0.85, -0.4, 0.55], 'RB4'); segment(RML, [0.35, -0.55, 0.8], 'RB5');
+  const RLL = mk(BI, [-0.1, -1, -0.2], 6, 4.7, 4.5, 'Right lower lobe bronchus', { ring: .1 });
+  segment(RLL, [-0.2, 0.1, -1], 'RB6');
+  const RBT = mk(RLL, [-0.1, -1, -0.05], 6, 4.4, 4.2, 'Right basal trunk');
+  segment(RBT, [0.45, -1, 0.2], 'RB7');
+  const RBT2 = mk(RBT, [-0.15, -1, -0.05], 5, 4.0, 3.8, 'Right basal trunk');
+  segment(RBT2, [-0.3, -0.8, 0.75], 'RB8'); segment(RBT2, [-0.85, -0.75, 0], 'RB9'); segment(RBT2, [-0.2, -0.8, -0.85], 'RB10');
+  const LMB = mk(T, [0.82, -0.57, 0], 45, 6.1, 5.5, 'Left main bronchus', { ring: .4, jit: 0.05 });
+  const LUL = mk(LMB, [0.6, 0.45, 0.45], 10, 4.5, 4.2, 'Left upper lobe bronchus', { ring: .15 });
+  const LUD = mk(LUL, [0.15, 0.85, 0.25], 8, 3.9, 3.7, 'LUL upper division');
+  segment(LUD, [0.2, 1, -0.5], 'LB1+2'); segment(LUD, [0.3, 0.15, 1], 'LB3');
+  const LING = mk(LUL, [0.45, -0.5, 0.8], 10, 3.5, 3.3, 'Lingular bronchus');
+  segment(LING, [0.9, -0.1, 0.4], 'LB4'); segment(LING, [0.4, -0.85, 0.45], 'LB5');
+  const LLL = mk(LMB, [0.25, -1, -0.15], 7, 4.7, 4.5, 'Left lower lobe bronchus', { ring: .1 });
+  segment(LLL, [0.2, 0.1, -1], 'LB6');
+  const LBT = mk(LLL, [0.2, -1, -0.1], 9, 4.3, 4.0, 'Left basal trunk');
+  segment(LBT, [0.1, -0.8, 0.75], 'LB7+8'); segment(LBT, [0.85, -0.8, 0], 'LB9'); segment(LBT, [0.2, -0.8, -0.85], 'LB10');
+  computeMapBounds();
+}
+
+// ---------- CPU distance field (for collision) ----------
+let tumor = null; // {c:[x,y,z], r, branch}
+let nearestBr = null, nearestH = 0;
+function capD(p, br) {
+  const pa = sub(p, br.a);
+  const h = clamp(dot(pa, br.ba) / br.L2, 0, 1);
+  return [Math.hypot(pa[0] - br.ba[0] * h, pa[1] - br.ba[1] * h, pa[2] - br.ba[2] * h) - (br.r1 + (br.r2 - br.r1) * h), h];
+}
+function tumorD(p) {
+  return len(sub(p, tumor.c)) - tumor.r + 0.35 * Math.sin(p[0] * 1.7 + 1) * Math.sin(p[1] * 1.9) * Math.sin(p[2] * 2.1 + 2);
+}
+function mapCPU(p, track) {
+  let d = 1e5, best = 1e5;
+  for (const br of B) {
+    const [di, h] = capD(p, br);
+    if (track && di < best) { best = di; nearestBr = br; nearestH = h; }
+    d = smin(d, di, SMOOTH_K);
+  }
+  if (tumor) d = -smin(-d, tumorD(p), 1.2);
+  return d;
+}
+function gradCPU(p) {
+  const e = 0.05;
+  return norm([
+    mapCPU([p[0] + e, p[1], p[2]]) - mapCPU([p[0] - e, p[1], p[2]]),
+    mapCPU([p[0], p[1] + e, p[2]]) - mapCPU([p[0], p[1] - e, p[2]]),
+    mapCPU([p[0], p[1], p[2] + e]) - mapCPU([p[0], p[1], p[2] - e])]);
+}
+
+// ---------- WebGL renderer ----------
+const MAXC = 28;
+const glc = $('gl');
+const gl = glc.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
+const VS = `#version 300 es
+in vec2 p; void main(){ gl_Position = vec4(p,0.,1.); }`;
+const FS = `#version 300 es
+precision highp float;
+#define MAXC ${MAXC}
+uniform vec2 uCenter; uniform float uRad; uniform vec3 uPos; uniform mat3 uRot;
+uniform vec4 uA[MAXC]; uniform vec4 uB[MAXC]; uniform vec4 uC[MAXC]; uniform int uCount;
+uniform vec4 uTumor; uniform float uTime; uniform float uBlood; uniform float uFov; uniform float uWet;
+out vec4 frag;
+int gI; float gH; vec3 gQ; float gS; float gT;
+
+float hash(vec3 p){ p=fract(p*0.3183099+.1); p*=17.; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
+float noise(vec3 x){
+  vec3 i=floor(x), f=fract(x); f=f*f*(3.-2.*f);
+  return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x), mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
+             mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x), mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
+}
+float fbm(vec3 p){ return noise(p)*.5+noise(p*2.03)*.25+noise(p*4.1)*.125; }
+float smin(float a,float b,float k){ float h=max(k-abs(a-b),0.)/k; return min(a,b)-h*h*k*.25; }
+
+float map(vec3 p){
+  float d=1e5, best=1e5; int bi=0; float bh=0., bl=1.; vec3 bq=vec3(0,0,1);
+  for(int i=0;i<MAXC;i++){
+    if(i>=uCount) break;
+    vec3 a=uA[i].xyz, ba=uB[i].xyz-a, pa=p-a;
+    float L2=dot(ba,ba), h=clamp(dot(pa,ba)/L2,0.,1.);
+    vec3 q=pa-ba*h;
+    float di=length(q)-mix(uA[i].w,uB[i].w,h);
+    if(di<best){ best=di; bi=i; bh=h; bq=q; bl=sqrt(L2); }
+    d=smin(d,di,${SMOOTH_K.toFixed(2)});
+  }
+  gI=bi; gH=bh; gQ=bq; gS=bh*bl;
+  float amp=uC[bi].x;
+  if(amp>0.){
+    vec3 rq=normalize(bq+1e-5);
+    float post=smoothstep(-0.8,-0.4,rq.z);         // posterior membranous wall has no cartilage
+    float rv=smoothstep(-0.2,1.0,sin(gS*1.8));
+    d+=amp*post*rv*smoothstep(0.,0.05,bh)*smoothstep(1.,0.9,bh);
+  }
+  gT=1e5;
+  if(uTumor.w>0.){
+    float dt=length(p-uTumor.xyz)-uTumor.w+0.35*sin(p.x*1.7+1.)*sin(p.y*1.9)*sin(p.z*2.1+2.);
+    gT=dt; d=-smin(-d,dt,1.2);
+  }
+  return d;
+}
+vec3 calcN(vec3 p){
+  vec2 e=vec2(.03,-.03);
+  return normalize(e.xyy*map(p+e.xyy)+e.yyx*map(p+e.yyx)+e.yxy*map(p+e.yxy)+e.xxx*map(p+e.xxx));
+}
+float bumpF(vec3 p){ return noise(p*.9)*.6+noise(p*2.4)*.3+noise(p*6.)*.1; }
+
+void main(){
+  vec2 uv=(gl_FragCoord.xy-uCenter)/uRad; float r=length(uv);
+  if(r>1.){ frag=vec4(0,0,0,1); return; }
+  float th=r*uFov*.5; vec2 d2=r>1e-5?uv/r:vec2(0.);
+  vec3 rd=normalize(uRot*vec3(sin(th)*d2,cos(th)));
+  vec3 ro=uPos;
+  float t=0.; bool hit=false;
+  for(int i=0;i<110;i++){
+    float d=-map(ro+rd*t);
+    if(d<0.003*t+0.006){ hit=true; break; }
+    t+=max(d*.85,.01);
+    if(t>170.) break;
+  }
+  vec3 col=vec3(0.);
+  if(hit){
+    vec3 p=ro+rd*t;
+    vec3 n=-calcN(p);
+    map(p);
+    int bi=gI; float tm=1.-smoothstep(-0.3,0.5,gT);
+    // micro relief
+    float e=.12, b0=bumpF(p);
+    vec3 g=vec3(bumpF(p+vec3(e,0,0))-b0,bumpF(p+vec3(0,e,0))-b0,bumpF(p+vec3(0,0,e))-b0)/e;
+    g-=n*dot(g,n); n=normalize(n-g*mix(.22,.9,tm));
+    // mucosa
+    float n1=fbm(p*.25);
+    vec3 base=vec3(.88,.46,.41)*(.82+.35*n1);
+    base=mix(base, vec3(.95,.55,.5), uC[bi].y*.25);
+    base*=mix(1.,.9,clamp(uC[bi].z*.3,0.,1.));
+    float amp=uC[bi].x;
+    if(amp>0.){
+      vec3 rq=normalize(gQ+1e-5);
+      float rv=smoothstep(.15,.95,sin(gS*1.8))*smoothstep(-0.8,-0.4,rq.z);
+      base=mix(base, vec3(.97,.8,.72), rv*.4*clamp(amp*2.,0.,1.));
+      float membr=1.-smoothstep(-0.8,-0.5,rq.z);   // longitudinal folds in membranous wall
+      base*=1.-membr*.12*smoothstep(.3,1.,sin(atan(rq.x,rq.y)*40.));
+    }
+    float v1=1.-smoothstep(0.,.045,abs(noise(p*.16+3.)-.5));
+    float v2=1.-smoothstep(0.,.035,abs(noise(p*.42+7.)-.5));
+    float v3=1.-smoothstep(0.,.03,abs(noise(p*1.1+1.)-.5));
+    base=mix(base, vec3(.55,.07,.08), max(max(v1*.6,v2*.4),v3*.22));
+    // lesion
+    vec3 tc=vec3(.9,.83,.64)*(.7+.45*noise(p*1.4));
+    float tv=1.-smoothstep(0.,.07,abs(noise(p*.85+11.)-.5));
+    tc=mix(tc, vec3(.7,.14,.1), tv*.75);
+    tc=mix(tc, vec3(.6,.35,.2), smoothstep(.55,.8,noise(p*2.2+5.))*.4);
+    base=mix(base, tc, tm);
+    // blood pooling in dependent (posterior) surfaces
+    float pool=uBlood*smoothstep(.1,.8,n.z)*1.6 + uBlood*.25;
+    base=mix(base, vec3(.32,.02,.02), clamp(pool,0.,.92));
+    // lighting: light guides at the scope tip
+    vec3 V=-rd;
+    vec3 lp=uPos+uRot*vec3(0.,-.6,0.);
+    vec3 L=normalize(lp-p);
+    float dif=max(dot(n,L),0.);
+    float spec=pow(max(dot(reflect(-L,n),V),0.),80.)*1.6+pow(max(dot(reflect(-L,n),V),0.),14.)*.12;
+    spec*=mix(1.,1.6,uWet);
+    float att=2.1/(1.+t*t/150.);
+    vec3 sss=mix(vec3(1.,.5,.45),vec3(1.),dif);
+    col=base*sss*(.06+dif*.95)*att + vec3(1.,.96,.92)*spec*att;
+    col=mix(col, vec3(.28,.02,.01)*att*.4, 1.-exp(-t*uBlood*.07));
+  }
+  col=1.-exp(-col*1.25);
+  col=pow(col,vec3(.9));
+  col*=mix(1.,.5,smoothstep(.55,1.,r));
+  col*=smoothstep(1.,.985,r);
+  col+= (hash(vec3(gl_FragCoord.xy,fract(uTime)*91.))-.5)*.025;
+  frag=vec4(col,1.);
+}`;
+let prog, U = {};
+function initGL() {
+  if (!gl) return false;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for (const n of ['uCenter', 'uRad', 'uPos', 'uRot', 'uA', 'uB', 'uC', 'uCount', 'uTumor', 'uTime', 'uBlood', 'uFov', 'uWet'])
+    U[n] = gl.getUniformLocation(prog, n);
+  return true;
+}
+const FOV = 2.0944; // 120°
+const ua = new Float32Array(MAXC * 4), ub = new Float32Array(MAXC * 4), uc = new Float32Array(MAXC * 4);
+let renderScale = 0.7, frameTimes = [];
+
+function renderGL(camPos, R, Uv, F) {
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  const w = Math.max(64, Math.round(glc.clientWidth * dpr * renderScale));
+  const h = Math.max(64, Math.round(glc.clientHeight * dpr * renderScale));
+  if (glc.width !== w || glc.height !== h) { glc.width = w; glc.height = h; }
+  gl.viewport(0, 0, w, h);
+  // choose nearest capsules
+  const ranked = B.map(br => [capD(camPos, br)[0], br]).sort((a, b) => a[0] - b[0]).slice(0, MAXC);
+  ranked.forEach(([, br], i) => {
+    ua.set([br.a[0], br.a[1], br.a[2], br.r1], i * 4);
+    ub.set([br.b[0], br.b[1], br.b[2], br.r2], i * 4);
+    uc.set([br.ring, br.tint, br.level, 0], i * 4);
+  });
+  gl.uniform4fv(U.uA, ua); gl.uniform4fv(U.uB, ub); gl.uniform4fv(U.uC, uc);
+  gl.uniform1i(U.uCount, ranked.length);
+  gl.uniform2f(U.uCenter, w / 2, h / 2);
+  gl.uniform1f(U.uRad, Math.min(w, h) * 0.47);
+  gl.uniform3fv(U.uPos, camPos);
+  gl.uniformMatrix3fv(U.uRot, false, [...R, ...Uv, ...F]);
+  gl.uniform4fv(U.uTumor, tumor ? [...tumor.c, tumor.r] : [0, 0, 0, 0]);
+  gl.uniform1f(U.uTime, performance.now() / 1000);
+  gl.uniform1f(U.uBlood, S.blood);
+  gl.uniform1f(U.uFov, FOV);
+  gl.uniform1f(U.uWet, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// ---------- game state ----------
+const RS = 1.6;                          // scope tip radius (mm)
+const MAX_FLEX = Math.PI / 2;            // full lever travel = 90° tip deflection
+const SHAFT_LIMIT = 40 * Math.PI / 180;  // the airway holds the shaft: max angle off the local airway axis
+const VIEW_LIMIT = 95 * Math.PI / 180;   // shaft angle + tip flex can never turn the tip back up the airway
+const REACH_DIST = 6;                    // mm from the lesion surface that counts as "reached"
+function setView() { // camera = shaft frame bent about its right axis by the tip flex angle
+  S.vF = norm(rot(S.F, S.R, S.flex)); S.vU = norm(rot(S.Uv, S.R, S.flex)); S.vR = S.R;
+}
+const S = {};
+let cfg = { mode: 'lesion', diff: 'guided', seed: 1, target: 'random' };
+let path = [];
+const keys = {};
+let mouseDX = 0, mouseDY = 0, wheel = 0;
+
+function resetState() {
+  Object.assign(S, {
+    state: 'playing', pos: [0, 98, 0], F: [0, -1, 0], Uv: [0, 0, 1], R: [-1, 0, 0],
+    vel: 0, flex: 0, flexLimited: false, yawV: 0, pitchV: 0, rollV: 0, t: 0,
+    blood: 0, peakBlood: 0, contacts: 0, contactCD: 0, dragDist: 0, flash: 0, drops: [], visited: new Set(),
+    reached: false, seen: false, cur: null, curH: 0, endTimer: -1, nav: cfg.diff === 'guided'
+  });
+  S.R = cross(S.F, S.Uv);
+  mapCPU(S.pos, true); S.cur = nearestBr; S.curH = nearestH;
+  setView();
+}
+
+function placeTumor() {
+  tumor = null; path = [];
+  if (cfg.mode !== 'lesion') return;
+  const code = cfg.target === 'random' ? SEG_CODES[Math.floor(rand() * SEG_CODES.length)] : cfg.target;
+  const seg = B.find(b => b.code === code && b.level === 1);
+  const h = 0.62 + rand() * 0.12;
+  const axis = add(seg.a, mul(seg.ba, h));
+  const r = seg.r1 + (seg.r2 - seg.r1) * h;
+  tumor = { c: add(axis, mul(perpTo(seg.dir), r * 1.05)), r: r * 0.78, branch: seg, code };
+  for (let b = seg; b; b = b.parent) path.unshift(b);
+}
+
+function startGame() {
+  buildTree(cfg.seed);
+  placeTumor();
+  resetState();
+  $('log').innerHTML = '';
+  log('Scope passed through the vocal cords.', 'g');
+  if (tumor) log(`Target: lesion in ${tumor.code} (${SEGMENTS[tumor.code]})`, 'w');
+  buildObjectives();
+  ['menu', 'result', 'pauseM'].forEach(id => $(id).hidden = true);
+}
+
+// ---------- UI helpers ----------
+let toastT = 0;
+function toast(msg, ms = 1800) { const el = $('toast'); el.textContent = msg; el.style.opacity = 1; toastT = ms / 1000; }
+function fmtT(t) { t = Math.floor(t); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; }
+function log(msg, cls = '') {
+  const el = document.createElement('div'); if (cls) el.className = cls;
+  el.textContent = `${fmtT(S.t || 0)}  ${msg}`; $('log').prepend(el);
+}
+function buildObjectives() {
+  const o = $('objectives');
+  if (cfg.mode === 'lesion') {
+    o.innerHTML = `
+      <div class="obj" id="ob1"><div class="box"></div><span>Navigate to <b>${tumor.code}</b><br><small style="color:var(--dim)">${SEGMENTS[tumor.code]}</small></span></div>
+      <div class="obj" id="ob2"><div class="box"></div><span>Center the lesion in view within ${REACH_DIST} mm</span></div>
+      <div id="distRow" class="mono" style="color:var(--accent);margin-top:6px"></div>`;
+  } else {
+    o.innerHTML = `<div style="margin-bottom:6px">Visit every segmental bronchus: <b id="visN">0</b>/18</div>
+      <div class="chips">${SEG_CODES.map(c => `<span class="chip" data-c="${c}">${c}</span>`).join('')}</div>`;
+  }
+}
+
+// ---------- wall contact & bleeding ----------
+function contact(onTumor, drag) {
+  S.contacts++; S.contactCD = 0.7; S.vel *= drag ? 0.6 : 0.15; S.flash = 1;
+  Remote.send({ t: 'buzz', ms: onTumor ? 120 : 60 });
+  S.blood = Math.min(1, S.blood + (onTumor ? 0.14 : 0.045));
+  if (S.blood > 0.12 || onTumor) addDrops(onTumor ? 4 : 2);
+  const where = S.cur ? (S.cur.code || S.cur.name) : 'airway';
+  log(onTumor ? `Lesion contact — friable, bleeding (${where})` : `Wall contact${drag ? ' — dragging' : ''} (${where})`, onTumor ? 'r' : 'w');
+}
+function addDrops(n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, r = Math.sqrt(Math.random()) * 0.85;
+    S.drops.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, s: 0.05 + Math.random() * 0.12, a: 0.5 + Math.random() * 0.4 });
+  }
+  if (S.drops.length > 40) S.drops.splice(0, S.drops.length - 40);
+}
+
+// ---------- physical limits on scope orientation ----------
+// Directions the airway allows the shaft to lie along here: the current branch, plus its parent near
+// the proximal end and its children near the distal end (so turning into a branch is smooth).
+function airwayAxes() {
+  const b = S.cur; if (!b) return [[0, -1, 0]];
+  const ax = [b.dir];
+  if (b.parent && S.curH < 0.45) ax.push(b.parent.dir);
+  if (S.curH > 0.55) for (const c of b.children) ax.push(c.dir);
+  return ax;
+}
+function offAxis(v, axes) {
+  let best = -2, bax = axes[0];
+  for (const a of axes) { const d = dot(v, a); if (d > best) { best = d; bax = a; } }
+  return [Math.acos(clamp(best, -1, 1)), bax];
+}
+function rotateFrameTo(newF) { // minimal rotation of the shaft frame so that F = newF
+  const ax = cross(S.F, newF), sn = len(ax);
+  if (sn < 1e-7) return;
+  const k = mul(ax, 1 / sn), a = Math.atan2(sn, dot(S.F, newF));
+  S.F = norm(newF); S.Uv = norm(rot(S.Uv, k, a));
+  S.R = norm(cross(S.F, S.Uv)); S.Uv = norm(cross(S.R, S.F));
+}
+function clampShaft() {
+  const [ang, ax] = offAxis(S.F, airwayAxes());
+  if (ang <= SHAFT_LIMIT) return;
+  let pp = sub(S.F, mul(ax, dot(S.F, ax)));
+  pp = len(pp) < 1e-5 ? S.Uv : norm(pp);
+  rotateFrameTo(norm(add(mul(ax, Math.cos(SHAFT_LIMIT)), mul(pp, Math.sin(SHAFT_LIMIT)))));
+}
+function allowedFlex(target) { // largest flex toward target that keeps the tip from facing back up the airway
+  const axes = airwayAxes();
+  const ok = f => offAxis(norm(rot(S.F, S.R, f)), axes)[0] <= VIEW_LIMIT;
+  if (ok(target)) return target;
+  let lo = 0, hi = target;
+  for (let i = 0; i < 12; i++) { const m = (lo + hi) / 2; if (ok(m)) lo = m; else hi = m; }
+  return lo;
+}
+
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (e.code === 'KeyP' || (e.code === 'Escape' && !document.pointerLockElement)) togglePause();
+  if (S.state !== 'playing') return;
+  if (e.code === 'KeyN') { S.nav = !S.nav; toast(`Nav guide ${S.nav ? 'on' : 'off'}`); }
+  if (e.code === 'KeyV') { mapView = 1 - mapView; }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+$('view').addEventListener('click', () => { if (S.state === 'playing') $('view').requestPointerLock?.(); });
+addEventListener('mousemove', e => { if (document.pointerLockElement === $('view')) { mouseDX += e.movementX; mouseDY += e.movementY; } });
+$('view').addEventListener('wheel', e => { e.preventDefault(); wheel += -Math.sign(e.deltaY); }, { passive: false });
+function togglePause() {
+  if (S.state === 'playing') { S.state = 'paused'; $('pauseM').hidden = false; document.exitPointerLock?.(); }
+  else if (S.state === 'paused') { S.state = 'playing'; $('pauseM').hidden = true; }
+}
+
+// ---------- update ----------
+function update(dt) {
+  if (S.state !== 'playing') return;
+  S.t += dt;
+  const fine = keys.ShiftLeft || keys.ShiftRight ? 0.35 : 1;
+  // steering the shaft (keyboard / mouse) and rotation (keys or phone twist)
+  const ty = ((keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0)) * 1.3 * fine;
+  const tp = ((keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0)) * 1.3 * fine;
+  const tr = ((keys.KeyE ? 1 : 0) - (keys.KeyQ ? 1 : 0)) * 1.6 * fine;
+  const k = Math.min(1, dt * 10);
+  S.yawV += (ty - S.yawV) * k; S.pitchV += (tp - S.pitchV) * k; S.rollV += (tr - S.rollV) * k;
+  let yaw = S.yawV * dt + mouseDX * 0.0022 * fine, pitch = S.pitchV * dt - mouseDY * 0.0022 * fine, roll = S.rollV * dt;
+  mouseDX = mouseDY = 0;
+  roll += Remote.rollAcc; Remote.rollAcc = 0;   // phone twist → scope rotation (1:1)
+  if (yaw) { S.F = norm(rot(S.F, S.Uv, -yaw)); S.R = norm(cross(S.F, S.Uv)); }
+  if (pitch) { S.F = norm(rot(S.F, S.R, pitch)); S.Uv = norm(cross(S.R, S.F)); }
+  if (roll) { S.Uv = norm(rot(S.Uv, S.F, roll)); S.R = norm(cross(S.F, S.Uv)); }
+  S.Uv = norm(cross(S.R, S.F)); S.R = norm(cross(S.F, S.Uv));
+  clampShaft();
+  // tip flexion: phone lever POSITION maps linearly to a deflection angle (holding still = fixed angle),
+  // limited only where the airway physically stops the tip from bending further
+  const flexWanted = Remote.connected ? Remote.pitch * MAX_FLEX : 0;
+  const flexT = allowedFlex(flexWanted);
+  S.flexLimited = Math.abs(flexWanted - flexT) > 0.05;
+  S.flex += (flexT - S.flex) * Math.min(1, dt * 14);
+  setView();
+
+  // advance / withdraw
+  const prevPos = S.pos;
+  const tv = ((keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0)) * 16 * fine + wheel * 22;
+  wheel *= Math.pow(0.02, dt);
+  S.vel += (tv - S.vel) * Math.min(1, dt * 6);
+  S.pos = add(S.pos, mul(S.vF, S.vel * dt));   // the tip leads
+  if (S.vel > 0 && Math.abs(S.flex) > 1e-3) {  // shaft follows the bent tip only while advancing
+    const a = S.flex * Math.min(1, S.vel * dt * 0.07);
+    S.F = norm(rot(S.F, S.R, a)); S.Uv = norm(cross(S.R, S.F));
+  }
+
+  // collision with airway wall
+  S.contactCD -= dt;
+  let pressed = false;
+  for (let it = 0; it < 3; it++) {
+    const d = -mapCPU(S.pos);
+    if (d >= RS) break;
+    const g = gradCPU(S.pos), pen = RS - d;
+    if (pen > 0.03) pressed = true;
+    if (it === 0 && pen > 0.3 && S.vel > 3 && S.contactCD <= 0) contact(tumor && tumorD(S.pos) < RS + 0.6);
+    S.pos = sub(S.pos, mul(g, pen));
+  }
+  // dragging the tip along the wall: every few mm of travel while touching counts as a contact
+  const moved = len(sub(S.pos, prevPos));
+  if (pressed && moved > 0.01) {
+    S.dragDist += moved;
+    if (S.dragDist > 3 && S.contactCD <= 0) { S.dragDist = 0; contact(tumor && tumorD(S.pos) < RS + 0.6, true); }
+  } else S.dragDist = Math.max(0, S.dragDist - dt * 4);
+  if (S.nav) { // gentle wall-avoidance assist
+    const d = -mapCPU(S.pos);
+    if (d < RS * 2.2) S.pos = sub(S.pos, mul(gradCPU(S.pos), (RS * 2.2 - d) * dt * 1.4));
+  }
+
+  // where are we?
+  mapCPU(S.pos, true);
+  S.cur = nearestBr; S.curH = nearestH;
+  clampShaft();
+  S.flex = allowedFlex(S.flex);
+  setView();
+  if (S.cur.seg && (S.cur.level >= 2 || S.curH > 0.35) && !S.visited.has(S.cur.seg)) {
+    S.visited.add(S.cur.seg);
+    log(`Entered ${S.cur.seg}`, 'g');
+    if (cfg.mode === 'survey') {
+      $('visN').textContent = S.visited.size;
+      document.querySelector(`.chip[data-c="${CSS.escape(S.cur.seg)}"]`)?.classList.add('on');
+      toast(`${S.cur.seg} inspected (${S.visited.size}/18)`);
+      if (S.visited.size >= 18) S.endTimer = 1.5;
+    }
+  }
+  if (tumor && !S.reached) {
+    const to = sub(tumor.c, S.pos), dl = len(to) - tumor.r;
+    if (!S.seen && S.cur.seg === tumor.code && dl < 15) {
+      S.seen = true; $('ob1').classList.add('done'); log('Lesion in view', 'g'); toast('Lesion ahead — center it and close in');
+    }
+    const ang = Math.acos(clamp(dot(S.vF, norm(to)), -1, 1));
+    if (dl < REACH_DIST && ang < 0.35) {
+      S.reached = true; $('ob1').classList.add('done'); $('ob2').classList.add('done');
+      log(`Lesion reached in ${tumor.code}`, 'g'); toast('🎯 Lesion reached');
+      Remote.send({ t: 'buzz', ms: [30, 40, 30] });
+      S.endTimer = 1.5;
+    }
+  }
+
+  // bleeding slowly clots; lens drops slowly clear
+  S.blood = Math.max(0, S.blood - 0.012 * dt);
+  for (const d of S.drops) d.a -= dt * 0.05;
+  S.drops = S.drops.filter(d => d.a > 0.02);
+  S.peakBlood = Math.max(S.peakBlood, S.blood);
+  S.flash = Math.max(0, S.flash - dt * 2.5);
+
+  if (S.endTimer > 0) { S.endTimer -= dt; if (S.endTimer <= 0) finish(true); }
+}
+
+// ---------- results ----------
+function finish(ok, why) {
+  S.state = ok ? 'won' : 'lost'; document.exitPointerLock?.();
+  let score = 5000 - S.t * 4 - S.contacts * 80 - S.peakBlood * 1500;
+  if (cfg.diff === 'expert') score *= 1.25;
+  score = Math.max(0, Math.round(ok ? score : 0));
+  const grade = !ok ? 'F' : score > 4400 ? 'S' : score > 3600 ? 'A' : score > 2700 ? 'B' : score > 1800 ? 'C' : 'D';
+  $('resTitle').textContent = ok ? 'Navigation complete' : 'Procedure aborted';
+  $('resSub').textContent = ok ? (cfg.mode === 'lesion' ? `Scope tip reached the lesion in ${tumor.code}.` : 'Full airway survey completed.') : why;
+  $('resGrade').textContent = grade;
+  $('resBody').innerHTML = `
+    <span>Score</span><b>${score}</b>
+    <span>Time</span><b>${fmtT(S.t)}</b>
+    <span>Wall contacts</span><b>${S.contacts}</b>
+    <span>Peak bleeding</span><b>${Math.round(S.peakBlood * 100)}%</b>
+    <span>Segments visited</span><b>${S.visited.size}/18</b>`;
+  $('result').hidden = false;
+}
+
+// ---------- overlay (scope HUD) ----------
+const ov = $('ov'), octx = ov.getContext('2d');
+function project(pt, cx, cy, R) {
+  const v = sub(pt, S.pos), l = len(v) || 1;
+  const x = dot(v, S.vR), y = dot(v, S.vU), z = dot(v, S.vF);
+  const th = Math.acos(clamp(z / l, -1, 1)), rr = Math.hypot(x, y) || 1;
+  const sr = th / (FOV / 2);
+  return { x: cx + x / rr * sr * R, y: cy - y / rr * sr * R, inside: sr <= 1, dx: x / rr, dy: -y / rr, dist: l };
+}
+function navWaypoint() {
+  if (!tumor || !S.cur) return null;
+  const idx = path.indexOf(S.cur);
+  if (idx === path.length - 1 || S.cur.seg === tumor.code) return { p: tumor.c, label: 'LESION', back: false };
+  if (idx >= 0) { const c = path[idx + 1]; return { p: add(c.a, mul(c.dir, Math.min(c.len * 0.6, 9))), label: c.code || c.name, back: false }; }
+  let a = S.cur; while (a && !path.includes(a)) a = a.parent;
+  return { p: S.cur.a, label: 'WITHDRAW', back: true };
+}
+function drawOverlay() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.round(ov.clientWidth * dpr), h = Math.round(ov.clientHeight * dpr);
+  if (ov.width !== w || ov.height !== h) { ov.width = w; ov.height = h; }
+  const c = octx; c.clearRect(0, 0, w, h);
+  const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.47;
+  if (!S.pos) return;
+  // lens drops (blood)
+  for (const d of S.drops) {
+    const x = cx + d.x * R, y = cy + d.y * R, r = d.s * R;
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(120,0,0,${d.a * 0.55})`); g.addColorStop(0.75, `rgba(90,0,0,${d.a * 0.65})`); g.addColorStop(1, 'rgba(60,0,0,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+  }
+  // contact red-out
+  if (S.flash > 0) {
+    const g = c.createRadialGradient(cx, cy, R * 0.3, cx, cy, R);
+    g.addColorStop(0, `rgba(255,60,50,${S.flash * 0.1})`); g.addColorStop(1, `rgba(200,20,20,${S.flash * 0.55})`);
+    c.fillStyle = g; c.beginPath(); c.arc(cx, cy, R, 0, TAU); c.fill();
+  }
+  // nav guide
+  if (S.nav && S.state === 'playing') {
+    const wp = navWaypoint();
+    if (wp) {
+      const pr = project(wp.p, cx, cy, R);
+      c.lineWidth = 2 * dpr; c.font = `${11 * dpr}px ui-monospace,Menlo,monospace`; c.textAlign = 'center';
+      const col = wp.back ? '#ffb020' : '#7cf0ff';
+      c.strokeStyle = col; c.fillStyle = col;
+      if (wp.back) {
+        c.fillText('▼ WRONG BRANCH — WITHDRAW (S)', cx, cy + R * 0.82);
+      } else if (pr.inside) {
+        const s = 14 * dpr * (1 + 0.1 * Math.sin(performance.now() / 200));
+        c.beginPath(); c.arc(pr.x, pr.y, s, 0, TAU); c.stroke();
+        c.beginPath(); c.moveTo(pr.x - s * 1.6, pr.y); c.lineTo(pr.x - s * 0.6, pr.y); c.moveTo(pr.x + s * 0.6, pr.y); c.lineTo(pr.x + s * 1.6, pr.y); c.stroke();
+        c.fillText(wp.label, pr.x, pr.y - s - 6 * dpr);
+      } else {
+        const ex = cx + pr.dx * R * 0.9, ey = cy + pr.dy * R * 0.9, a = Math.atan2(pr.dy, pr.dx);
+        c.save(); c.translate(ex, ey); c.rotate(a); c.beginPath();
+        c.moveTo(12 * dpr, 0); c.lineTo(-6 * dpr, -8 * dpr); c.lineTo(-6 * dpr, 8 * dpr); c.closePath(); c.fill(); c.restore();
+        c.fillText(wp.label, cx + pr.dx * R * 0.78, cy + pr.dy * R * 0.78);
+      }
+    }
+  }
+  // scope notch (orientation marker) & bezel
+  c.strokeStyle = '#111'; c.lineWidth = 6 * dpr; c.beginPath(); c.arc(cx, cy, R + 2 * dpr, 0, TAU); c.stroke();
+  c.fillStyle = '#e8eef4'; c.beginPath();
+  c.moveTo(cx - 7 * dpr, cy - R - 10 * dpr); c.lineTo(cx + 7 * dpr, cy - R - 10 * dpr); c.lineTo(cx, cy - R + 2 * dpr); c.closePath(); c.fill();
+  // corner text like a video processor
+  c.fillStyle = 'rgba(200,215,230,.7)'; c.font = `${11 * dpr}px ui-monospace,Menlo,monospace`; c.textAlign = 'left';
+  c.fillText(`BF-SIM   ${fmtT(S.t)}`, 14 * dpr, 22 * dpr);
+  c.fillText(`ADV ${S.vel >= 0 ? '+' : ''}${S.vel.toFixed(1)} mm/s`, 14 * dpr, 38 * dpr);
+  const fd = Math.round(S.flex * 180 / Math.PI);
+  c.fillText(`TIP ${fd > 0 ? '▲' : fd < 0 ? '▼' : '·'} ${Math.abs(fd)}°`, 14 * dpr, 54 * dpr);
+  c.textAlign = 'right';
+  if (S.flexLimited) { c.fillStyle = '#ffb020'; c.fillText('TIP AGAINST WALL', w - 14 * dpr, 22 * dpr); }
+  if (S.blood > 0.5 && S.state === 'playing') {
+    c.textAlign = 'center'; c.fillStyle = `rgba(255,80,80,${0.6 + 0.4 * Math.sin(performance.now() / 150)})`;
+    c.font = `bold ${14 * dpr}px ui-sans-serif,system-ui`; c.fillText('HEAVY BLEEDING', cx, cy - R * 0.85);
+  }
+}
+
+// ---------- minimap ----------
+const mm = $('minimap'), mctx = mm.getContext('2d');
+let mapView = 0, mapB = [];
+function computeMapBounds() {
+  mapB = [0, 1].map(v => {
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const b of B) for (const p of [b.a, b.b]) { const x = v ? p[2] : p[0]; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+    return { x0: x0 - 8, x1: x1 + 8, y0: y0 - 8, y1: y1 + 8 };
+  });
+}
+function drawMinimap() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.round(mm.clientWidth * dpr), h = Math.round(mm.clientHeight * dpr);
+  if (mm.width !== w || mm.height !== h) { mm.width = w; mm.height = h; }
+  const c = mctx; c.clearRect(0, 0, w, h);
+  if (!B.length || !S.pos) return;
+  const bd = mapB[mapView];
+  const s = Math.min(w / (bd.x1 - bd.x0), h / (bd.y1 - bd.y0));
+  const ox = (w - (bd.x1 - bd.x0) * s) / 2, oy = (h - (bd.y1 - bd.y0) * s) / 2;
+  const P = p => [ox + ((mapView ? p[2] : p[0]) - bd.x0) * s, oy + (bd.y1 - p[1]) * s];
+  c.lineCap = 'round';
+  const showPath = S.nav && cfg.diff === 'guided';
+  for (const b of B) {
+    const [x0, y0] = P(b.a), [x1, y1] = P(b.b);
+    c.lineWidth = Math.max(1, (b.r1 + b.r2) * s * 0.9);
+    let col = b.level >= 3 ? '#2a1c20' : b.level === 2 ? '#3b2329' : '#5a3038';
+    if (b.seg && S.visited.has(b.seg)) col = b.level >= 3 ? '#1d3b2c' : '#2c6b4a';
+    if (showPath && path.includes(b)) col = '#2a8aa0';
+    c.strokeStyle = col; c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke();
+  }
+  if (tumor && (cfg.diff === 'guided' || S.visited.has(tumor.code))) {
+    const [tx, ty] = P(tumor.c); c.fillStyle = '#ff5050';
+    c.beginPath(); c.arc(tx, ty, Math.max(3 * dpr, tumor.r * s), 0, TAU); c.fill();
+  }
+  const [px, py] = P(S.pos), [fx, fy] = P(add(S.pos, mul(S.vF, 12)));
+  c.strokeStyle = '#ffe066'; c.lineWidth = 2 * dpr; c.beginPath(); c.moveTo(px, py); c.lineTo(fx, fy); c.stroke();
+  c.fillStyle = '#ffe066'; c.beginPath(); c.arc(px, py, 4 * dpr, 0, TAU); c.fill();
+  c.fillStyle = '#6b7c8d'; c.font = `${9 * dpr}px ui-monospace,Menlo,monospace`;
+  c.textAlign = 'left'; c.fillText(mapView ? 'POST' : 'R', 6 * dpr, h - 8 * dpr);
+  c.textAlign = 'right'; c.fillText(mapView ? 'ANT' : 'L', w - 6 * dpr, h - 8 * dpr);
+  c.textAlign = 'center'; c.fillText(mapView ? 'SAGITTAL' : 'CORONAL', w / 2, h - 8 * dpr);
+}
+
+// ---------- side panel refresh ----------
+let uiT = 0;
+function updateUI(dt) {
+  uiT -= dt; if (uiT > 0) return; uiT = 0.15;
+  if (!S.pos) return;
+  if (Remote.connected && S.state === 'playing' && S.cur)
+    Remote.send({ t: 'st', loc: S.cur.level === 0 ? S.cur.name.replace(/ bronchus$/, '') : S.cur.code,
+      d: tumor ? Math.round(Math.max(0, len(sub(tumor.c, S.pos)) - tumor.r)) : null });
+  $('stTime').textContent = fmtT(S.t);
+  $('stContacts').textContent = S.contacts;
+  $('stDist').textContent = tumor && cfg.diff === 'guided' ? `${Math.max(0, len(sub(tumor.c, S.pos)) - tumor.r).toFixed(0)} mm` : '—';
+  $('bloodBar').style.width = `${Math.round(S.blood * 100)}%`;
+  if (S.cur) {
+    const b = S.cur;
+    $('loc').textContent = b.level === 0 ? b.name : b.code;
+    $('locSub').textContent = b.level === 0 ? `Ø ${(b.r1 * 2).toFixed(1)} mm` : `${b.name} · Ø ${(b.r1 * 2).toFixed(1)} mm`;
+  }
+  if (tumor && cfg.diff === 'guided' && $('distRow')) {
+    $('distRow').textContent = `Distance to lesion: ${Math.max(0, len(sub(tumor.c, S.pos)) - tumor.r).toFixed(0)} mm`;
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now(), perfAcc = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt);
+  if (toastT > 0) { toastT -= dt; if (toastT <= 0) $('toast').style.opacity = 0; }
+  if (B.length && S.pos) {
+    const R = S.vR, Uv = S.vU, F = S.vF;
+    renderGL(S.pos, R, Uv, F);
+    // adaptive resolution
+    frameTimes.push(dt); perfAcc += dt;
+    if (perfAcc > 1.2) {
+      const avg = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+      if (avg > 0.024 && renderScale > 0.35) renderScale = Math.max(0.35, renderScale - 0.08);
+      else if (avg < 0.0175 && renderScale < 1) renderScale = Math.min(1, renderScale + 0.05);
+      frameTimes = []; perfAcc = 0;
+    }
+    drawOverlay();
+    drawMinimap();
+  }
+  updateUI(dt);
+  requestAnimationFrame(frame);
+}
+
+// ---------- phone remote (PeerJS: public broker for the handshake, then direct WebRTC) ----------
+const PEER_PREFIX = 'bronchsim-';
+const Remote = {
+  peer: null, conns: new Set(), code: null, connected: false, ready: false, err: '',
+  pitch: 0, rollAcc: 0, lastR: null, lastZ: null,
+  available: typeof Peer !== 'undefined',
+  send(o) { for (const c of this.conns) if (c.open) try { c.send(o); } catch (e) { } },
+  newCode() {
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    this.code = Array.from({ length: 6 }, () => A[Math.floor(Math.random() * A.length)]).join('');
+    try { sessionStorage.setItem('scopeCode', this.code); } catch (e) { }
+  },
+  init() {
+    if (!this.available) { this.err = 'Could not load PeerJS (offline?)'; return this.ui(); }
+    try { this.code = sessionStorage.getItem('scopeCode'); } catch (e) { }
+    if (!this.code || !/^[A-Z0-9]{6}$/.test(this.code)) this.newCode();
+    this.open();
+  },
+  open() {
+    if (this.peer) try { this.peer.destroy(); } catch (e) { }
+    this.ready = false; this.ui();
+    const peer = this.peer = new Peer(PEER_PREFIX + this.code.toLowerCase(), { debug: 0 });
+    peer.on('open', () => { this.ready = true; this.err = ''; this.ui(); this.refreshQR(); });
+    peer.on('connection', conn => {
+      conn.on('open', () => { this.conns.add(conn); this.setConnected(true); });
+      conn.on('data', m => this.onMsg(m));
+      const drop = () => { this.conns.delete(conn); this.setConnected([...this.conns].some(c => c.open)); };
+      conn.on('close', drop); conn.on('error', drop);
+    });
+    peer.on('disconnected', () => { // lost the broker; existing phone links keep working
+      this.ready = false; this.ui();
+      setTimeout(() => { if (!peer.destroyed) try { peer.reconnect(); } catch (e) { } }, 2000);
+    });
+    peer.on('error', e => {
+      if (e.type === 'unavailable-id') { this.newCode(); return this.open(); }  // code clash: pick another
+      this.err = e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error'
+        ? 'Pairing service unreachable — retrying…' : `Pairing error: ${e.type}`;
+      this.ui();
+      if (!this.ready) setTimeout(() => this.open(), 4000);
+    });
+  },
+  setConnected(v) {
+    if (v === this.connected) return;
+    this.connected = v;
+    if (!v) { this.pitch = 0; this.lastR = null; }
+    if (S.pos) log(v ? 'Phone scope handle paired' : 'Phone scope handle disconnected', v ? 'g' : 'w');
+    toast(v ? '📱 Phone paired — twist to rotate, thumb lever to flex' : '📱 Phone disconnected');
+    if (v) $('pairM').hidden = true;
+    this.ui();
+  },
+  onMsg(m) {
+    if (!m || m.t !== 's') return;
+    if (m.z !== this.lastZ) { this.lastZ = m.z; this.lastR = null; }   // phone re-zeroed: no jump
+    if (this.lastR !== null && S.state === 'playing') {
+      let d = m.r - this.lastR;
+      if (d > Math.PI) d -= TAU; else if (d < -Math.PI) d += TAU;
+      this.rollAcc += d;
+    }
+    this.lastR = m.r;
+    this.pitch = clamp(+m.p || 0, -1, 1);
+  },
+  phoneUrl() { // the phone page lives next to this one (e.g. on GitHub Pages); it must be HTTPS for motion sensors
+    return location.protocol === 'https:' ? new URL(`remote.html?s=${this.code}`, location.href).href : null;
+  },
+  ui() {
+    $('phoneDot').className = this.connected ? 'ok' : '';
+    $('phoneTxt').innerHTML = this.connected ? '<b>Paired</b> · twist = roll, thumb = tip'
+      : this.err ? this.err : this.ready ? `Not paired · code <b>${this.code}</b>` : 'Connecting to pairing service…';
+    $('pairBtn').textContent = this.connected ? 'Info' : 'Pair';
+    const ps = $('pairState');
+    if (ps) ps.textContent = this.connected ? '✅ Phone connected' : this.err ? `⚠️ ${this.err}` : this.ready ? '⏳ Waiting for phone…' : '⏳ Registering with pairing service…';
+  },
+  async refreshQR() {
+    if ($('pairM').hidden) return;
+    const url = this.phoneUrl();
+    const box = $('pairBody');
+    if (!url) {
+      box.innerHTML = `<p>Phone pairing needs the game to be opened over <b>HTTPS</b> (phones only expose motion sensors on secure pages).
+        Open the GitHub Pages version of the simulator and pair from there.</p><div id="pairState"></div>`;
+      return this.ui();
+    }
+    let svg = '';
+    try { const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); svg = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); } catch (e) { }
+    box.innerHTML = `
+      <div id="qrBox">
+        <div id="qrImg">${svg || 'QR library unavailable — use the link below'}</div>
+        <ol id="qrSteps">
+          <li>Scan the QR code with your phone's camera (or open the link below).</li>
+          <li>Tap <b>Start</b> and allow motion access.</li>
+          <li>Hold the phone upright like a scope handle: <b>twist</b> to rotate, <b>thumb lever</b> to flex the tip, <b>W/S</b> on the keyboard to advance.</li>
+        </ol>
+      </div>
+      <div id="qrUrl">${url}</div>
+      <div style="color:var(--dim);font-size:12px;margin-top:6px">Pairing code <b class="mono">${this.code}</b> · handshake via the public PeerJS service, then a direct phone↔laptop link.</div>
+      <div id="pairState"></div>`;
+    this.ui();
+  },
+  openPair() { $('pairM').hidden = false; $('pairBody').innerHTML = '<div id="pairState"></div>'; this.ui(); if (this.ready || !this.available) this.refreshQR(); }
+};
+$('pairBtn').onclick = () => Remote.openPair();
+$('pairBtn2').onclick = () => Remote.openPair();
+$('pairClose').onclick = () => { $('pairM').hidden = true; };
+Remote.init();
+
+// ---------- menu ----------
+for (const c of SEG_CODES) { const o = document.createElement('option'); o.value = c; o.textContent = `${c} — ${SEGMENTS[c]}`; $('targetSel').append(o); }
+document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', () => {
+  $('targetRow').style.display = document.querySelector('input[name=mode]:checked').value === 'lesion' ? '' : 'none';
+}));
+$('rndSeed').onclick = () => { $('seed').value = 1 + Math.floor(Math.random() * 99999); };
+$('startBtn').onclick = () => {
+  cfg = { mode: document.querySelector('input[name=mode]:checked').value, diff: document.querySelector('input[name=diff]:checked').value,
+    seed: Math.max(1, parseInt($('seed').value) || 1), target: $('targetSel').value };
+  startGame();
+};
+$('resumeBtn').onclick = togglePause;
+$('quitBtn').onclick = () => { S.state = 'menu'; $('pauseM').hidden = true; $('menu').hidden = false; };
+$('againBtn').onclick = () => { $('result').hidden = true; $('menu').hidden = false; };
+
+try {
+  if (!initGL()) throw new Error('WebGL2 is not available in this browser.');
+  // idle preview behind the menu
+  buildTree(1); resetState(); S.state = 'menu';
+  requestAnimationFrame(frame);
+} catch (e) {
+  document.querySelector('#menu .dlg').innerHTML = `<h1>Can't start</h1><p>${e.message}</p>`;
+  console.error(e);
+}
+</script>
+</body>
+</html>

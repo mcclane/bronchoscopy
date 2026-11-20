@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#06080b">
+<title>Scope Remote</title>
+<style>
+  :root{--bg:#06080b;--panel:#0d1218;--line:#1f2a36;--text:#d5dee7;--dim:#6b7c8d;--accent:#7cf0ff;--ok:#3ef07a;--bad:#ff6b6b;--warn:#ffb020}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,sans-serif;overflow:hidden;overscroll-behavior:none;touch-action:none}
+  #ui{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr;gap:10px;
+    padding:calc(env(safe-area-inset-top) + 10px) 14px calc(env(safe-area-inset-bottom) + 12px)}
+  header{display:flex;align-items:center;gap:8px;font-size:13px}
+  #dot{width:10px;height:10px;border-radius:50%;background:var(--bad);flex:none}
+  #dot.ok{background:var(--ok)} #dot.wait{background:var(--warn)}
+  #status{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #vit{font:600 13px ui-monospace,Menlo,monospace;color:#3ad7ff}
+  #gear{background:none;border:0;color:var(--dim);font-size:20px;padding:0 4px}
+  #mid{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
+  #mid.left{direction:rtl} #mid.left>*{direction:ltr}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px;min-height:0}
+  .lbl{font-size:11px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+  #dial{width:min(32vw,150px);aspect-ratio:1;border-radius:50%;border:2px solid var(--line);position:relative;background:radial-gradient(circle,#2a1215,#0b0e12 70%)}
+  #needle{position:absolute;inset:0;transition:transform .05s linear}
+  #needle:before{content:"";position:absolute;left:50%;top:-2px;transform:translateX(-50%);border:9px solid transparent;border-top:14px solid #e8eef4}
+  #rollDeg{font:300 28px ui-monospace,Menlo,monospace}
+  .btn{border:1px solid var(--line);background:#141b23;color:var(--text);border-radius:12px;padding:10px 14px;font:600 14px system-ui;touch-action:none}
+  .btn:active,.btn.on{background:#1f3540;border-color:var(--accent)}
+  #track{position:relative;width:86px;flex:1;max-height:420px;border-radius:43px;background:linear-gradient(#0f1a22,#0a0f14 50%,#0f1a22);border:1px solid var(--line);touch-action:none}
+  #track:before{content:"";position:absolute;left:12px;right:12px;top:50%;height:2px;background:var(--line)}
+  #knob{position:absolute;left:50%;top:50%;width:72px;height:72px;margin:-36px 0 0 -36px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#f4f7fa,#9aa3ad 60%,#5d646c);box-shadow:0 4px 14px rgba(0,0,0,.6);pointer-events:none}
+  #track.active{border-color:var(--accent)}
+  .arr{font-size:12px;color:var(--dim)}
+  #start,#settings{position:fixed;inset:0;background:rgba(6,8,11,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:28px;text-align:center;z-index:5}
+  #start h1{margin:0;font-size:24px} #start p{color:var(--dim);margin:0;max-width:340px}
+  #go{background:var(--accent);color:#04121a;border:0;border-radius:14px;padding:16px 40px;font:700 18px system-ui}
+  #err{color:var(--bad);max-width:340px;font-size:14px}
+  #settings{display:none;align-items:stretch;justify-content:flex-start;text-align:left;padding-top:calc(env(safe-area-inset-top) + 24px)}
+  #settings.open{display:flex}
+  #settings label{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--line)}
+  #settings input{width:22px;height:22px}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="ui">
+  <header>
+    <span id="dot"></span><span id="status">Connecting…</span><span id="vit"></span>
+    <button id="gear" aria-label="Settings">⚙︎</button>
+  </header>
+  <section id="mid">
+    <div class="box">
+      <div class="lbl">Roll</div>
+      <div id="dial"><div id="needle"></div></div>
+      <div id="rollDeg">0°</div>
+      <button class="btn" id="zero">Zero</button>
+    </div>
+    <div class="box">
+      <div class="arr" id="arrUp">▲ tip down</div>
+      <div id="track"><div id="knob"></div></div>
+      <div class="arr" id="arrDn">▼ tip up</div>
+    </div>
+  </section>
+</div>
+
+<div id="settings">
+  <h2 style="margin:0 0 8px">Settings</h2>
+  <label>Invert roll<input type="checkbox" id="optRoll"></label>
+  <label>Invert lever (thumb up = tip up)<input type="checkbox" id="optLever"></label>
+  <label>Lever on left side<input type="checkbox" id="optLeft"></label>
+  <label>Roll sensitivity ×2<input type="checkbox" id="optGain"></label>
+  <button class="btn" id="closeSet" style="margin-top:20px">Done</button>
+</div>
+
+<div id="start">
+  <h1>📱 Scope Remote</h1>
+  <p>Hold the phone upright like a bronchoscope handle. Twist it around its long axis to rotate the scope. Use your thumb on the lever to flex the tip. Use <b>W / S</b> on the laptop to advance and withdraw.</p>
+  <button id="go">Start</button>
+  <div id="err"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const code = (new URLSearchParams(location.search).get('s') || '').toUpperCase();
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('scope.' + k); return v === null ? d : v === '1'; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('scope.' + k, v ? '1' : '0'); } catch (e) { } }
+};
+const opt = { roll: store.get('roll', false), lever2: store.get('lever2', false), left: store.get('left', false), gain: store.get('gain', false) };
+
+// ---------- connection (PeerJS broker for the handshake, then direct WebRTC to the laptop) ----------
+const PEER_PREFIX = 'bronchsim-';
+let peer = null, conn = null, paired = false, brokerOk = false, note = '', retryT = null;
+function setStatus() {
+  $('dot').className = paired ? 'ok' : brokerOk ? 'wait' : '';
+  $('status').textContent = !code ? 'No pairing code — scan the QR again'
+    : paired ? `Paired · ${code}` : note || (brokerOk ? 'Looking for the simulator…' : 'Connecting…');
+}
+function retry(ms) { clearTimeout(retryT); retryT = setTimeout(link, ms); }
+function link() {
+  if (!peer || peer.destroyed || !brokerOk) return;
+  if (conn) try { conn.close(); } catch (e) { }
+  const c = conn = peer.connect(PEER_PREFIX + code.toLowerCase(), { serialization: 'json', reliable: true });
+  const timeout = setTimeout(() => { if (!c.open) { note = 'Still looking for the simulator…'; setStatus(); retry(500); } }, 9000);
+  c.on('open', () => { clearTimeout(timeout); paired = true; note = ''; setStatus(); navigator.vibrate?.(40); });
+  c.on('data', m => {
+    if (!m) return;
+    if (m.t === 'buzz') navigator.vibrate?.(m.ms);
+    else if (m.t === 'st') $('vit').textContent = `${m.loc || ''}${m.d != null ? ` · ${m.d} mm` : ''}`;
+  });
+  const drop = () => { if (conn !== c) return; paired = false; note = 'Link lost — reconnecting…'; setStatus(); retry(1500); };
+  c.on('close', drop); c.on('error', drop);
+}
+function connect() {
+  if (!code) return setStatus();
+  if (typeof Peer === 'undefined') { note = 'Could not load PeerJS — check the internet connection'; return setStatus(); }
+  peer = new Peer({ debug: 0 });
+  peer.on('open', () => { brokerOk = true; note = ''; setStatus(); link(); });
+  peer.on('disconnected', () => { brokerOk = false; setStatus(); setTimeout(() => { if (!peer.destroyed) try { peer.reconnect(); } catch (e) { } }, 2000); });
+  peer.on('error', e => {
+    if (e.type === 'peer-unavailable') { note = `Simulator ${code} not found — is the game page open?`; setStatus(); return retry(2500); }
+    note = `Pairing service: ${e.type} — retrying…`; setStatus();
+    if (!brokerOk) { try { peer.destroy(); } catch (_) { } setTimeout(connect, 3000); }
+  });
+}
+const send = o => { if (conn && conn.open) try { conn.send(o); } catch (e) { } };
+
+// ---------- orientation → roll about the phone's long (y) axis ----------
+let qRef = null, qNow = null, twist = 0, zEpoch = 0, gotOrient = false;
+function quatFromEuler(alpha, beta, gamma) { // W3C DeviceOrientation (Z-X'-Y'') → [w,x,y,z]
+  const d = Math.PI / 360, x = beta * d, y = gamma * d, z = alpha * d;
+  const cX = Math.cos(x), cY = Math.cos(y), cZ = Math.cos(z), sX = Math.sin(x), sY = Math.sin(y), sZ = Math.sin(z);
+  return [cX * cY * cZ - sX * sY * sZ, sX * cY * cZ - cX * sY * sZ, cX * sY * cZ + sX * cY * sZ, cX * cY * sZ + sX * sY * cZ];
+}
+const qmul = (a, b) => [
+  a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+  a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+  a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+  a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]];
+const qconj = q => [q[0], -q[1], -q[2], -q[3]];
+const wrap = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+function onOrient(e) {
+  if (e.alpha == null && e.beta == null) return;
+  gotOrient = true;
+  qNow = quatFromEuler(e.alpha || 0, e.beta || 0, e.gamma || 0);
+  if (!qRef) qRef = qNow;
+  const r = qmul(qconj(qRef), qNow);          // rotation relative to the zero pose, in the phone's frame
+  twist = wrap(2 * Math.atan2(r[2], r[0]));  // swing–twist: keep only the twist about the long axis
+  $('needle').style.transform = `rotate(${(-twist * 180 / Math.PI).toFixed(1)}deg)`;
+  $('rollDeg').textContent = `${Math.round(-twist * 180 / Math.PI)}°`;
+}
+$('zero').addEventListener('click', () => { qRef = qNow; zEpoch++; navigator.vibrate?.(15); });
+
+// ---------- thumb lever: absolute position slider (center = straight, ends = full flex), springs to center on release ----------
+let lever = 0, leverId = null;
+const track = $('track'), knob = $('knob');
+const leverRange = () => Math.max(20, track.clientHeight / 2 - 38);
+function drawKnob() { knob.style.transform = `translateY(${(-lever * leverRange()).toFixed(1)}px)`; }
+function setLever(e) {
+  const r = track.getBoundingClientRect();
+  lever = Math.max(-1, Math.min(1, (r.top + r.height / 2 - e.clientY) / leverRange()));  // +1 = top
+  drawKnob();
+}
+track.addEventListener('pointerdown', e => {
+  leverId = e.pointerId; track.setPointerCapture(e.pointerId); track.classList.add('active'); setLever(e);
+});
+track.addEventListener('pointermove', e => { if (e.pointerId === leverId) setLever(e); });
+const release = e => { if (e.pointerId !== leverId) return; leverId = null; lever = 0; track.classList.remove('active'); drawKnob(); };
+track.addEventListener('pointerup', release); track.addEventListener('pointercancel', release);
+
+// ---------- settings ----------
+function applyOpts() {
+  $('optRoll').checked = opt.roll; $('optLever').checked = opt.lever2; $('optLeft').checked = opt.left; $('optGain').checked = opt.gain;
+  $('mid').classList.toggle('left', opt.left);
+  $('arrUp').textContent = opt.lever2 ? '▲ tip up' : '▲ tip down';
+  $('arrDn').textContent = opt.lever2 ? '▼ tip down' : '▼ tip up';
+}
+for (const [id, k] of [['optRoll', 'roll'], ['optLever', 'lever2'], ['optLeft', 'left'], ['optGain', 'gain']])
+  $(id).addEventListener('change', e => { opt[k] = e.target.checked; store.set(k, opt[k]); applyOpts(); });
+$('gear').onclick = () => $('settings').classList.add('open');
+$('closeSet').onclick = () => $('settings').classList.remove('open');
+applyOpts();
+
+// ---------- stream state to the simulator (~40 Hz) ----------
+setInterval(() => {
+  const p = opt.lever2 ? lever : -lever;   // linear; default: lever down = tip up
+  const r = -twist * (opt.roll ? -1 : 1) * (opt.gain ? 2 : 1);
+  send({ t: 's', r, p, z: zEpoch + (opt.gain ? 1000 : 0) + (opt.roll ? 2000 : 0) });
+}, 25);
+
+// ---------- start (permission + wake lock) ----------
+let wakeLock = null;
+async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) { } }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+$('go').onclick = async () => {
+  $('err').textContent = '';
+  if (!window.isSecureContext) {
+    $('err').textContent = 'Motion sensors need HTTPS. Open the https:// link from the QR code.'; return;
+  }
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') { $('err').textContent = 'Motion permission was denied. Allow it in your browser settings and reload.'; return; }
+    }
+  } catch (e) { $('err').textContent = 'Could not request motion permission: ' + e.message; return; }
+  addEventListener('deviceorientation', onOrient);
+  keepAwake();
+  $('start').classList.add('hidden');
+  connect(); setStatus();
+  setTimeout(() => { if (!gotOrient) $('status').textContent = 'No motion data — sensors blocked?'; }, 2500);
+};
+setStatus();
+</script>
+</body>
+</html>
