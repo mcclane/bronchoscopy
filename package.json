@@ -1,0 +1,6 @@
+{
+  "name": "bronchoscopy-sim",
+  "private": true,
+  "description": "Bronchoscopy simulator. Static site for GitHub Pages; server.js is only for local development.",
+  "scripts": { "dev": "node server.js" }
+}

@@ -995,8 +995,12 @@ const Remote = {
     this.lastR = m.r;
     this.pitch = clamp(+m.p || 0, -1, 1);
   },
-  phoneUrl() { // the phone page lives next to this one (e.g. on GitHub Pages); it must be HTTPS for motion sensors
-    return location.protocol === 'https:' ? new URL(`remote.html?s=${this.code}`, location.href).href : null;
+  async phoneUrl() { // the phone page must be HTTPS for motion sensors
+    if (location.protocol === 'https:') return new URL(`remote.html?s=${this.code}`, location.href).href; // GitHub Pages
+    if (['localhost', '127.0.0.1'].includes(location.hostname)) {  // local dev server (node server.js) serves HTTPS on the LAN
+      try { return (await (await fetch(`/api/info?s=${this.code}`)).json()).phoneUrl; } catch (e) { }
+    }
+    return null;
   },
   ui() {
     $('phoneDot').className = this.connected ? 'ok' : '';
@@ -1008,11 +1012,12 @@ const Remote = {
   },
   async refreshQR() {
     if ($('pairM').hidden) return;
-    const url = this.phoneUrl();
+    const url = await this.phoneUrl();
     const box = $('pairBody');
     if (!url) {
       box.innerHTML = `<p>Phone pairing needs the game to be opened over <b>HTTPS</b> (phones only expose motion sensors on secure pages).
-        Open the GitHub Pages version of the simulator and pair from there.</p><div id="pairState"></div>`;
+        Open the GitHub Pages version, or for local development run <kbd>npm run dev</kbd> and open
+        <span class="mono" style="color:var(--accent)">http://localhost:8080</span>.</p><div id="pairState"></div>`;
       return this.ui();
     }
     let svg = '';
@@ -1022,6 +1027,7 @@ const Remote = {
         <div id="qrImg">${svg || 'QR library unavailable — use the link below'}</div>
         <ol id="qrSteps">
           <li>Scan the QR code with your phone's camera (or open the link below).</li>
+          ${/^https:\/\/\d+\.\d+\.\d+\.\d+:/.test(url) ? `<li>Local dev link: phone must be on the same Wi-Fi. Accept the certificate warning: <b>Show Details → visit this website</b> (iPhone) or <b>Advanced → Proceed</b> (Android).</li>` : ''}
           <li>Tap <b>Start</b> and allow motion access.</li>
           <li>Hold the phone upright like a scope handle: <b>twist</b> to rotate, <b>thumb lever</b> to flex the tip, <b>W/S</b> on the keyboard to advance.</li>
         </ol>
