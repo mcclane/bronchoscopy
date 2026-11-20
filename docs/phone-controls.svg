@@ -6,10 +6,7 @@
     <marker id="ahY" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#ffd166"/>
     </marker>
-    <linearGradient id="skin" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#d9a07a"/><stop offset=".5" stop-color="#ecbd98"/><stop offset="1" stop-color="#d49b75"/>
-    </linearGradient>
-    <radialGradient id="knob" cx=".35" cy=".3" r=".8">
+      <radialGradient id="knob" cx=".35" cy=".3" r=".8">
       <stop offset="0" stop-color="#f4f7fa"/><stop offset=".6" stop-color="#9aa3ad"/><stop offset="1" stop-color="#5d646c"/>
     </radialGradient>
     <radialGradient id="scope" cx=".5" cy=".5" r=".5">
@@ -25,11 +22,8 @@
   <text x="240" y="500" fill="#6b7c8d" font-size="12">long axis</text>
 
   <!-- twist arrow: back half dashed, front half solid -->
-  <path d="M325 62 A 95 20 0 0 0 135 62" fill="none" stroke="#7cf0ff" stroke-width="2.5" stroke-dasharray="5 6" opacity=".5"/>
-  <path d="M135 62 A 95 20 0 0 0 325 62" fill="none" stroke="#7cf0ff" stroke-width="3" marker-start="url(#ah)" marker-end="url(#ah)"/>
-
-  <!-- palm & wrist (behind the phone) -->
-  <path d="M138 540 L140 470 C 128 420, 135 372, 168 345 L 296 345 C 326 362, 334 420, 326 470 L 324 540 Z" fill="url(#skin)" stroke="#a8724f" stroke-width="2"/>
+  <path d="M325 62 A 95 20 0 0 0 135 62" fill="none" stroke="#7cf0ff" stroke-width="2.5" stroke-dasharray="5 6" opacity=".45"/>
+  <path d="M147.7 72 A 95 20 0 0 0 312.3 72" fill="none" stroke="#7cf0ff" stroke-width="3" marker-start="url(#ah)" marker-end="url(#ah)"/>
 
   <!-- phone -->
   <rect x="165" y="95" width="130" height="350" rx="20" fill="#05070a" stroke="#3a4654" stroke-width="3"/>
@@ -45,19 +39,6 @@
   <rect x="242" y="150" width="34" height="250" rx="17" fill="#0f1a22" stroke="#24313d" stroke-width="2"/>
   <line x1="246" y1="275" x2="272" y2="275" stroke="#24313d" stroke-width="2"/>
   <circle cx="259" cy="300" r="14" fill="url(#knob)"/>
-
-  <!-- fingertips wrapping round the left edge -->
-  <g fill="url(#skin)" stroke="#a8724f" stroke-width="2">
-    <rect x="144" y="190" width="31" height="32" rx="15"/>
-    <rect x="142" y="230" width="34" height="34" rx="16"/>
-    <rect x="143" y="272" width="33" height="33" rx="15"/>
-    <rect x="146" y="313" width="29" height="30" rx="14"/>
-  </g>
-
-  <!-- thumb on the lever -->
-  <path d="M318 455 C 322 400, 296 350, 266 318" fill="none" stroke="#a8724f" stroke-width="35" stroke-linecap="round"/>
-  <path d="M318 455 C 322 400, 296 350, 266 318" fill="none" stroke="#e8b38e" stroke-width="31" stroke-linecap="round"/>
-  <ellipse cx="264" cy="318" rx="9" ry="11" fill="#f3d2bb" opacity=".85" transform="rotate(-40 264 318)"/>
 
   <!-- lever arrows -->
   <line x1="362" y1="262" x2="362" y2="192" stroke="#ffd166" stroke-width="3" marker-end="url(#ahY)"/>
