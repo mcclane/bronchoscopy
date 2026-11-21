@@ -157,7 +157,7 @@
   <main id="view">
     <canvas id="gl"></canvas>
     <canvas id="ov"></canvas>
-    <div id="hint">Click the view to steer with the mouse · <kbd>P</kbd> pause</div>
+    <div id="hint">Click the view to use the mouse (↔ rotate · ↕ tip) · <kbd>P</kbd> pause</div>
     <div id="toast"></div>
   </main>
 
@@ -180,9 +180,9 @@
       <h2>Controls</h2>
       <div class="keys">
         <span><kbd>W</kbd>/<kbd>S</kbd> · wheel</span><span>Advance / withdraw</span>
-        <span><kbd>↑</kbd><kbd>↓</kbd> · mouse</span><span>Angle scope up / down</span>
-        <span><kbd>←</kbd><kbd>→</kbd> <kbd>A</kbd><kbd>D</kbd></span><span>Steer left / right</span>
-        <span><kbd>Q</kbd>/<kbd>E</kbd></span><span>Rotate scope</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> · mouse ↕</span><span>Tip lever (flex up / down)</span>
+        <span><kbd>C</kbd></span><span>Straighten tip</span>
+        <span><kbd>Q</kbd><kbd>E</kbd> <kbd>A</kbd><kbd>D</kbd> · mouse ↔</span><span>Rotate scope</span>
         <span><kbd>Shift</kbd></span><span>Fine control</span>
         <span><kbd>N</kbd></span><span>Toggle nav guide</span>
         <span><kbd>V</kbd></span><span>Switch map view</span>
@@ -230,6 +230,7 @@
         <li><b>Navigate to a lesion</b>: guide the bronchoscope to a target in a chosen segment (RB1–RB10, LB1+2–LB10).</li>
         <li><b>Airway survey</b>: visit every segmental bronchus to learn bronchial segment anatomy.</li>
         <li><b>Realistic scope handling</b>: advance and withdraw, rotate the scope, and flex the tip. Wall contact causes bleeding that obscures the view.</li>
+        <li><b>Physics-based scope</b>: the whole bronchoscope is simulated as an elastic Cosserat rod that rubs, bends and buckles against the airway walls, with a real bending section and friction.</li>
         <li><b>Phone as the bronchoscope</b>: pair your phone by QR code, twist it to rotate the scope, and use your thumb as the tip-flex lever.</li>
       </ul>
       <p>Built for medical students, residents, and pulmonary and interventional pulmonology fellows. Educational tool only, not a medical device.</p>
@@ -357,6 +358,7 @@ function buildTree(seed) {
   segment(LLL, [0.2, 0.1, -1], 'LB6');
   const LBT = mk(LLL, [0.2, -1, -0.1], 9, 4.3, 4.0, 'Left basal trunk');
   segment(LBT, [0.1, -0.8, 0.75], 'LB7+8'); segment(LBT, [0.85, -0.8, 0], 'LB9'); segment(LBT, [0.2, -0.8, -0.85], 'LB10');
+  linkTree();
   computeMapBounds();
 }
 
@@ -368,9 +370,10 @@ function capD(p, br) {
   const h = clamp(dot(pa, br.ba) / br.L2, 0, 1);
   return [Math.hypot(pa[0] - br.ba[0] * h, pa[1] - br.ba[1] * h, pa[2] - br.ba[2] * h) - (br.r1 + (br.r2 - br.r1) * h), h];
 }
-function tumorD(p) {
-  return len(sub(p, tumor.c)) - tumor.r + 0.35 * Math.sin(p[0] * 1.7 + 1) * Math.sin(p[1] * 1.9) * Math.sin(p[2] * 2.1 + 2);
+function tumorD3(x, y, z) {
+  return Math.hypot(x - tumor.c[0], y - tumor.c[1], z - tumor.c[2]) - tumor.r + 0.35 * Math.sin(x * 1.7 + 1) * Math.sin(y * 1.9) * Math.sin(z * 2.1 + 2);
 }
+const tumorD = p => tumorD3(p[0], p[1], p[2]);
 function mapCPU(p, track) {
   let d = 1e5, best = 1e5;
   for (const br of B) {
@@ -561,15 +564,338 @@ function renderGL(camPos, R, Uv, F) {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
-// ---------- game state ----------
-const RS = 1.6;                          // scope tip radius (mm)
-const MAX_FLEX = Math.PI / 2;            // full lever travel = 90° tip deflection
-const SHAFT_LIMIT = 40 * Math.PI / 180;  // the airway holds the shaft: max angle off the local airway axis
-const VIEW_LIMIT = 95 * Math.PI / 180;   // shaft angle + tip flex can never turn the tip back up the airway
-const REACH_DIST = 6;                    // mm from the lesion surface that counts as "reached"
-function setView() { // camera = shaft frame bent about its right axis by the tip flex angle
-  S.vF = norm(rot(S.F, S.R, S.flex)); S.vU = norm(rot(S.Uv, S.R, S.flex)); S.vR = S.R;
+// ---------- scope physics: the whole scope is a discrete Cosserat rod ----------
+// The inserted scope is a chain of short, inextensible segments. Each segment carries an orientation frame
+// (quaternion → d1,d2,d3), and the Cosserat bend/twist strain lives in the relative rotation of neighbours
+// (the discrete Darboux vector, as in Kugelstadt & Schömer 2016's position-and-orientation rods). Stretch
+// and shear are negligible for a scope, so node positions are rebuilt from the frames by forward
+// kinematics from the handle. A scope moves slowly, so each frame is solved quasi-statically by repeating:
+//   1. relax  — every joint eases toward its rest Darboux vector (straight for the insertion tube, the
+//               lever's curvature for the bending section), within hard limits (no kinking, no over-bend)
+//   2. sweep  — place nodes handle → tip; a node in the wall is pushed out (Coulomb friction) and the
+//               scope behind it yields: mostly the shaft a few segments back, the cable-held tip only
+//               toward straight. Anything that still can't clear is length lost to the wall.
+// The handle feeds the rod through the glottis (W/S) along its own centreline and twists it (phone / keys);
+// a push that would jam the scope doesn't happen and is felt as resistance. Corner cutting, riding the
+// outer wall, the tip stalling against the wall, and "this branch is too sharp to enter" all emerge —
+// nothing about the airway is scripted.
+const RS = 1.6;                  // scope radius (mm): a 3.2 mm thin bronchoscope
+const SEG = 2.5;                 // rod segment length (mm)
+const NSEG = 120;                // 300 mm of rod: enough to reach any airway
+const NBEND = 9;                 // distal bending section: 9 × 2.5 mm = 22.5 mm
+const FLEX_UP = Math.PI, FLEX_DOWN = 130 * Math.PI / 180;   // full lever travel, like a real scope
+const SHAFT_RMIN = 10;           // minimum bend radius of the insertion tube (mm); tighter would kink it
+const GLOTTIS = [0, 112, 0];     // the scope passes the cords here, pointing caudally
+const INS_MIN = 30;              // mm inserted at the start (and when fully withdrawn)
+const ITERS = 24;                // solver passes per frame
+const K_SHAFT = 0.08, K_BEND = 0.25, K_TWIST = 0.9;   // share of each joint's deviation from rest relaxed per pass
+const CABLE_LEAD = 0.35;         // rad the cable drive can pull ahead of the actual tip angle (finite tension)
+const SHAFT_SHARE = 0.7;         // share of a wall correction taken by the shaft rather than the tip
+const PIVOT = 4;                 // segments behind a wall contact where the shaft yields
+const MAX_CONTACT_STEP = 0.1;    // rad: most one wall contact can rotate the scope per pass (no snapping)
+const MAX_SPEED = 90;            // mm/s: fastest any part of the scope may move (damping)
+const JAM_COMP = 1.5, JAM_PEN = 0.25;   // mm: a push that leaves the scope this jammed doesn't happen
+const MU_S = 0.4, MU_K = 0.3;    // scope–mucosa friction
+const Q_BASE = [Math.SQRT1_2, Math.SQRT1_2, 0, 0];   // handle frame: d3 = −y (caudal), d2 = +z (anterior)
+const Q_ID = [1, 0, 0, 0];
+const REACH_DIST = 6;            // mm from the lesion surface that counts as "reached"
+const rod = { P: [], P0: [], Q: [], nb: [], nd: 0, acc: null, press: 0, comp: 0, maxPen: 0, blocked: false };
+
+const qmul = (a, b) => [a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3], a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+  a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1], a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]];
+function qnormIn(q) { const l = Math.hypot(q[0], q[1], q[2], q[3]) || 1; q[0] /= l; q[1] /= l; q[2] /= l; q[3] /= l; }
+const qd2 = ([w, x, y, z]) => [2 * (x * y - w * z), w * w - x * x + y * y - z * z, 2 * (y * z + w * x)];
+const qd3 = ([w, x, y, z]) => [2 * (x * z + w * y), 2 * (y * z - w * x), w * w - x * x - y * y + z * z];
+
+// hard bend limits per joint. A joint's relative rotation o = q0⁻¹q1 has x = up/down bend (negative = up),
+// y = side bend, z = twist. The bending section is a vertebra chain: it bends only in its up/down plane and
+// never tighter than its full-deflection arc; the insertion tube bends any way down to SHAFT_RMIN.
+const SIN_UP = Math.sin(FLEX_UP / NBEND / 2), SIN_DN = Math.sin(FLEX_DOWN / NBEND / 2);
+const SIN_SHAFT = Math.sin(SEG / SHAFT_RMIN / 2), SIN_SIDE = Math.sin(SEG / SHAFT_RMIN / 4);
+function limitBend(q0, q1, tip) {
+  let o = qmul([q0[0], -q0[1], -q0[2], -q0[3]], q1);
+  if (o[0] < 0) o = o.map(v => -v);
+  let x = o[1], y = o[2];
+  if (tip) { x = clamp(x, -SIN_UP, SIN_DN); y = clamp(y, -SIN_SIDE, SIN_SIDE); }
+  else { const sb = Math.hypot(x, y); if (sb > SIN_SHAFT) { x *= SIN_SHAFT / sb; y *= SIN_SHAFT / sb; } }
+  if (x === o[1] && y === o[2]) return;
+  o[1] = x; o[2] = y; o[0] = Math.sqrt(Math.max(0, 1 - x * x - y * y - o[3] * o[3]));
+  const q = qmul(q0, o); q1[0] = q[0]; q1[1] = q[1]; q1[2] = q[2]; q1[3] = q[3];
 }
+// airway wall: local distance field around a node (only nearby branches), negative inside the lumen
+function capDist(x, y, z, br) {
+  const px = x - br.a[0], py = y - br.a[1], pz = z - br.a[2], v = br.ba;
+  const h = clamp((px * v[0] + py * v[1] + pz * v[2]) / br.L2, 0, 1);
+  return Math.hypot(px - v[0] * h, py - v[1] * h, pz - v[2] * h) - (br.r1 + (br.r2 - br.r1) * h);
+}
+function localD(x, y, z, cands) {
+  let d = 1e5;
+  for (const br of cands) d = smin(d, capDist(x, y, z, br), SMOOTH_K);
+  if (tumor) d = -smin(-d, tumorD3(x, y, z), 1.2);
+  return d;
+}
+function trackBranch(p, b) { // walk the tree to the branch nearest this node
+  for (let k = 0; k < 8; k++) {
+    let best = b, bd = capDist(p[0], p[1], p[2], b);
+    for (const c of b.adj) { const d = capDist(p[0], p[1], p[2], c); if (d < bd) { bd = d; best = c; } }
+    if (best === b) break; b = best;
+  }
+  return b;
+}
+function linkTree() { // neighbour lists for walking and for the local distance field
+  for (const b of B) {
+    const sib = b.parent ? b.parent.children : [];
+    b.adj = [b.parent, ...b.children, ...sib].filter(c => c && c !== b);
+    const gp = b.parent?.parent;
+    const near = new Set([b, b.parent, gp, ...sib, ...(gp ? gp.children : []), ...b.children, ...b.children.flatMap(c => c.children)]);
+    near.delete(undefined); near.delete(null);
+    b.near = [...near];
+  }
+}
+function wallPush(i, target, frac = 1) { // push node i to `target` mm from the wall; returns [depth, normal]
+  const p = rod.P[i], c = rod.nb[i].near;
+  const f0 = localD(p[0], p[1], p[2], c);
+  if (-f0 >= target) return [0, null];
+  const e = 0.05;
+  const g = norm([localD(p[0] + e, p[1], p[2], c) - f0, localD(p[0], p[1] + e, p[2], c) - f0, localD(p[0], p[1], p[2] + e, c) - f0]);
+  const pen = (target + f0) * frac;
+  const q = [p[0] - g[0] * pen, p[1] - g[1] * pen, p[2] - g[2] * pen];
+  const stop = blockedAt(p, q, c);   // in an airway narrower than the scope, don't shove it out the far side
+  const r = stop || q;
+  p[0] = r[0]; p[1] = r[1]; p[2] = r[2];
+  return [pen, g];
+}
+function collide(i, friction) {
+  const [pen, g] = wallPush(i, RS);
+  if (!pen || !friction) return pen;
+  const p = rod.P[i], p0 = rod.P0[i];   // Coulomb friction against this frame's sliding
+  let tx = p[0] - p0[0], ty = p[1] - p0[1], tz = p[2] - p0[2];
+  const dn = tx * g[0] + ty * g[1] + tz * g[2];
+  tx -= g[0] * dn; ty -= g[1] * dn; tz -= g[2] * dn;
+  const tl = Math.hypot(tx, ty, tz);
+  if (tl > 1e-9) {
+    const f = tl < MU_S * pen ? 1 : Math.min(1, MU_K * pen / tl);
+    p[0] -= tx * f; p[1] -= ty * f; p[2] -= tz * f;
+  }
+  return pen;
+}
+const qFromTo = (a, b) => {  // minimal rotation taking unit vector a onto b (null if none needed)
+  const c = cross(a, b), w = 1 + dot(a, b);
+  if (w < 1e-6 || (Math.abs(c[0]) + Math.abs(c[1]) + Math.abs(c[2])) < 1e-9) return null;
+  const r = [w, c[0], c[1], c[2]]; qnormIn(r); return r;
+};
+// Elastic pass, handle → tip: each joint's Darboux rotation relaxes toward its rest value (bend with
+// stiffness kb, twist with kt) and is held within its limits. The correction rotates the whole chain
+// distal of the joint rigidly, so relaxing the shaft never bends the tip section and vice versa.
+function relax(nd, bend) {
+  const Q = rod.Q;
+  let acc = null;
+  for (let j = nd - 1; j >= 0; j--) {
+    if (acc) { const q = qmul(acc, Q[j]); qnormIn(q); Q[j] = q; }
+    const tip = j < NBEND, rest = tip ? bend : Q_ID, kb = tip ? K_BEND : K_SHAFT;
+    const q0 = Q[j + 1], before = Q[j];
+    let o = qmul([q0[0], -q0[1], -q0[2], -q0[3]], before);
+    if (o[0] * rest[0] + o[1] * rest[1] + o[2] * rest[2] + o[3] * rest[3] < 0) o = o.map(v => -v);
+    o = [0, o[1] + (rest[1] - o[1]) * kb, o[2] + (rest[2] - o[2]) * kb, o[3] + (rest[3] - o[3]) * K_TWIST];
+    o[0] = Math.sqrt(Math.max(0, 1 - o[1] * o[1] - o[2] * o[2] - o[3] * o[3]));
+    const q = qmul(q0, o); qnormIn(q);
+    limitBend(q0, q, tip);
+    const dr = qmul(q, [before[0], -before[1], -before[2], -before[3]]); qnormIn(dr);
+    Q[j] = q;
+    acc = acc ? qmul(dr, acc) : dr; qnormIn(acc);
+  }
+}
+// One handle→tip sweep: place each node by forward kinematics from its proximal neighbour (the scope
+// neither stretches nor shears). If a node is in the wall, the contact force bends the scope behind it:
+// its moment grows with lever arm, so the correction is a rigid rotation of everything distal of a pivot
+// PIVOT segments back (the tip keeps its commanded shape instead of folding at the contact). Rotations
+// are applied lazily to the rest of the chain as the sweep moves on. If a node still can't clear
+// (head-on), it stays pushed out and the lost length is felt at the handle as resistance.
+// continuous collision: if the straight path a→b passes through tissue (e.g. across the thin wall between
+// two neighbouring branches), return the last free point before it; null if the path is clear
+function blockedAt(a, b, cands) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], d = Math.hypot(dx, dy, dz);
+  if (d < 0.25) return null;
+  const n = Math.ceil(d / 0.25);
+  for (let k = 1; k <= n; k++) {
+    const t = k / n;
+    if (localD(a[0] + dx * t, a[1] + dy * t, a[2] + dz * t, cands) > 0) {
+      const t0 = (k - 1) / n; return [a[0] + dx * t0, a[1] + dy * t0, a[2] + dz * t0];
+    }
+  }
+  return null;
+}
+function sweep(nd, friction) {
+  const { P, Q } = rod;
+  let press = 0;
+  rod.acc = null;
+  for (let i = nd - 1; i >= 0; i--) {
+    if (rod.acc) { const q = qmul(rod.acc, Q[i]); qnormIn(q); Q[i] = q; }
+    const b = P[i + 1];
+    let d = qd3(Q[i]);
+    const pf = [b[0] + d[0] * SEG, b[1] + d[1] * SEG, b[2] + d[2] * SEG];
+    const stop = blockedAt(P[i], pf, rod.nb[i].near);   // never tunnel through a wall between passes
+    P[i] = stop || pf.slice();
+    let pen = collide(i, friction);
+    if (stop) pen = Math.max(pen, len(sub(pf, P[i])));
+    if (!pen) continue;
+    if (i < 2) press += pen;
+    // split the correction by compliance: part bends the scope PIVOT segments back (the stiffer shaft
+    // yields), the rest bends the joint right behind the contact (the cable-held tip yields)
+    pivotTurn(i, Math.min(Math.max(i + PIVOT, NBEND + 1), nd), pf, P[i], SHAFT_SHARE);
+    let p2 = P[i].slice();
+    if (wallPush(i, RS)[0]) {              // still in the wall: the joint right behind takes the rest
+      pivotTurn(i, i + 1, p2, P[i], 1, true);
+      wallPush(i, RS);                     // whatever is left (head-on, limits) stays pushed out: lost length
+    }
+  }
+  return press;
+}
+// rotate the chain distal of pivot node k so that node i moves from `from` toward `to` (fraction `share`,
+// capped per pass), respecting the pivot joint's bend limit; re-place nodes k-1…i; carry rotation on
+function pivotTurn(i, k, from, to, share, unbendOnly) {
+  const { P, Q } = rod, pk = P[k];
+  let r = qFromTo(norm(sub(from, pk)), norm(sub(to, pk)));
+  if (!r) return;
+  const full = 2 * Math.acos(clamp(r[0], -1, 1));
+  if (full < 1e-5) return;
+  const ang = Math.min(MAX_CONTACT_STEP, full * share), s = Math.sin(ang / 2) / Math.sin(full / 2);
+  r = [Math.cos(ang / 2), r[1] * s, r[2] * s, r[3] * s];
+  const before = Q[k - 1];
+  const q = qmul(r, before); qnormIn(q);
+  if (unbendOnly) {   // a wall can push a cable-held tip back toward straight, not bend it further
+    const bx = q => { const o = qmul([Q[k][0], -Q[k][1], -Q[k][2], -Q[k][3]], q); return Math.hypot(o[1], o[2]) * (o[0] < 0 ? -1 : 1); };
+    if (Math.abs(bx(q)) > Math.abs(bx(before))) return;
+  }
+  limitBend(Q[k], q, k - 1 < NBEND);
+  const dr = qmul(q, [before[0], -before[1], -before[2], -before[3]]); qnormIn(dr);
+  for (let j = k - 1; j >= i; j--) {
+    if (j < k - 1) { const qq = qmul(dr, Q[j]); qnormIn(qq); Q[j] = qq; } else Q[j] = q;
+    const bj = P[j + 1], dj = qd3(Q[j]);
+    const pj = [bj[0] + dj[0] * SEG, bj[1] + dj[1] * SEG, bj[2] + dj[2] * SEG];
+    P[j] = blockedAt(P[j], pj, rod.nb[j].near) || pj;
+    if (j > i) wallPush(j, RS);   // nodes already settled this sweep stay out of the wall
+  }
+  rod.acc = rod.acc ? qmul(dr, rod.acc) : dr; qnormIn(rod.acc);
+}
+function rodOutside() { // the part of the rod outside the patient rides on the handle: fixed line + roll
+  const qh = qmul(Q_BASE, [Math.cos(S.roll / 2), 0, 0, Math.sin(S.roll / 2)]);
+  for (let i = rod.nd; i <= NSEG; i++) {
+    const p = rod.P[i]; p[0] = GLOTTIS[0]; p[1] = GLOTTIS[1] + i * SEG - S.ins; p[2] = GLOTTIS[2];
+    if (i < NSEG) rod.Q[i] = qh.slice();
+  }
+}
+// feeding: the scope slides along itself — every node moves along the current centreline by the fed
+// length (the tip leads along its own direction); the elastic/wall solve then corrects the shape
+const nlerpQ = (a, b, t) => {
+  const s = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3] < 0 ? -1 : 1;
+  const q = [0, 1, 2, 3].map(k => a[k] + (b[k] * s - a[k]) * t); qnormIn(q); return q;
+};
+function feed(dIns) {
+  const { P, Q } = rod, nd = rod.nd;
+  const f = Math.min(1, Math.abs(dIns) / SEG);
+  if (dIns > 0) {
+    for (let i = nd; i >= 1; i--) {
+      const a = P[i], b = P[i - 1];
+      P[i] = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+      if (i < nd) Q[i] = nlerpQ(Q[i], Q[i - 1], f);
+    }
+    P[0] = add(P[0], mul(qd3(Q[0]), dIns));
+  } else if (dIns < 0) {
+    for (let i = 0; i < nd; i++) {
+      const a = P[i], b = P[i + 1];
+      P[i] = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+      Q[i] = nlerpQ(Q[i], Q[i + 1], f);
+    }
+  }
+}
+// One frame of the handle: feed/twist/lever, then relax. If pushing in would leave the scope jammed into
+// the wall (an airway narrower than the scope, a head-on block), the push doesn't happen: the frame is
+// re-solved without it and the hand feels resistance.
+function rodStep(dt, dIns, dRoll, flex) {
+  rod.blocked = false;
+  const startP = rod.P.map(p => p.slice()), startQ = rod.Q.map(q => q.slice());
+  if (dIns > 0) {
+    const snap = { P: rod.P.map(p => p.slice()), Q: rod.Q.map(q => q.slice()), nb: rod.nb.slice(), nd: rod.nd, ins: S.ins, roll: S.roll };
+    solveStep(dt, dIns, dRoll, flex);
+    if (rod.comp > JAM_COMP || rod.maxPen > JAM_PEN) {
+      const press = rod.press;   // the tip still pushed into the wall this frame
+      Object.assign(rod, { P: snap.P, Q: snap.Q, nb: snap.nb, nd: snap.nd }); S.ins = snap.ins; S.roll = snap.roll;
+      rod.P0 = rod.P.map(p => p.slice());
+      solveStep(dt, 0, dRoll, flex);
+      rod.blocked = true; rod.press = Math.max(rod.press, press);
+    }
+  } else solveStep(dt, dIns, dRoll, flex);
+  // inertia: the solve is quasi-static, so a stressed scope could "pop" to a new shape in one frame
+  // (e.g. flicking out of a side branch). Real tissue and scope damping make that take a moment:
+  // no part of the scope may move faster than MAX_SPEED, so a pop-out is a quick slide, not a teleport.
+  const nd = rod.nd, lim = MAX_SPEED * dt;
+  const moved = () => { let m = 0; for (let i = 0; i < nd; i++) m = Math.max(m, len(sub(rod.P[i], startP[i]))); return m; };
+  let m = moved(), best = null;
+  for (let k = 0; k < 6 && m > lim * 1.2; k++) {
+    if (!best || m < best.m) best = { m, P: rod.P.map(p => p.slice()), Q: rod.Q.map(q => q.slice()) };
+    const t = lim / m;
+    for (let i = 0; i < nd; i++) rod.Q[i] = nlerpQ(startQ[i], rod.Q[i], t);
+    rod.P0 = startP.map(p => p.slice());
+    for (let i = 0; i < nd; i++) rod.P[i] = startP[i].slice();
+    sweep(nd, false);
+    m = moved();
+  }
+  if (best && best.m < m) { rod.P = best.P; rod.Q = best.Q; }
+  syncCamera(dt);
+}
+function solveStep(dt, dIns, dRoll, flex) {
+  const ins0 = S.ins;
+  S.ins = clamp(S.ins + dIns, INS_MIN, (NSEG - 1) * SEG);
+  feed(S.ins - ins0);
+  S.roll += dRoll;
+  const prevNd = rod.nd, nd = rod.nd = Math.min(NSEG - 1, Math.floor(S.ins / SEG - 1e-9) + 1);
+  for (let i = prevNd; i < nd; i++) rod.nb[i] = rod.nb[Math.max(0, prevNd - 1)];   // newly inserted nodes
+  rodOutside();
+  if (dRoll) {   // the insertion tube is torque-stable: handle rotation reaches the tip ~1:1
+    const qr = [Math.cos(dRoll / 2), 0, 0, Math.sin(dRoll / 2)];
+    for (let i = 0; i < nd; i++) rod.Q[i] = qmul(rod.Q[i], qr);
+  }
+  // lever → rest curvature of the bending section (rotate d3 toward d2). The control cables have finite
+  // tension: when the tip is blocked the drive stalls a little ahead of where the tip actually is,
+  // instead of forcing the section into contortions.
+  const ph = (S.flex + clamp(flex - S.flex, -CABLE_LEAD, CABLE_LEAD)) / NBEND;
+  const bend = [Math.cos(ph / 2), -Math.sin(ph / 2), 0, 0];
+  const { P, P0, Q } = rod;
+  if (S.nav && wallPush(0, RS * 2.2, dt * 1.4)[0]) {   // guided mode: gentle centring of the tip
+    const r = qFromTo(qd3(rod.Q[0]), norm(sub(rod.P[0], rod.P[1])));
+    if (r) { rod.Q[0] = qmul(r, rod.Q[0]); qnormIn(rod.Q[0]); }
+  }
+  for (let i = 0; i < nd; i++) { P0[i][0] = P[i][0]; P0[i][1] = P[i][1]; P0[i][2] = P[i][2]; rod.nb[i] = trackBranch(P[i], rod.nb[i]); }
+  let press = 0;
+  for (let it = 0; it < ITERS; it++) {
+    relax(nd, bend);
+    // friction once per frame (last pass), where the penetration reflects the real contact load
+    const p = sweep(nd, it === ITERS - 1);
+    if (it === 0) press = p;
+  }
+  // how jammed the rod is: length lost to the walls, and the deepest remaining wall penetration
+  let comp = 0, maxPen = 0;
+  for (let i = 0; i < nd; i++) {
+    comp += Math.max(0, SEG - len(sub(P[i], P[i + 1])));
+    maxPen = Math.max(maxPen, RS + localD(P[i][0], P[i][1], P[i][2], rod.nb[i].near));
+  }
+  rod.comp = comp; rod.maxPen = maxPen; rod.press = press;
+}
+function syncCamera(dt) { // camera = tip node looking along the tip segment; small solver jitter is low-passed
+  const q = rod.Q[0], a = dt ? 1 - Math.exp(-dt / 0.06) : 1;   // (hides solver shimmer when the tip is jammed)
+  const p = rod.P[0], f = norm(qd3(q)), u = norm(qd2(q));
+  // only sub-millimetre jitter is filtered; real motion is followed exactly, so the camera traces the
+  // tip's own path and never cuts a corner through tissue
+  S.pos = S.pos && a < 1 && len(sub(p, S.pos)) < 0.8 ? add(S.pos, mul(sub(p, S.pos), a)) : p.slice();
+  S.vF = S.vF && a < 1 ? norm(add(S.vF, mul(sub(f, S.vF), a))) : f;
+  S.vU = S.vU && a < 1 ? norm(add(S.vU, mul(sub(u, S.vU), a))) : u;
+  S.vR = norm(cross(S.vF, S.vU)); S.vU = norm(cross(S.vR, S.vF));
+  const qb = rod.Q[NBEND];                  // actual tip deflection relative to the shaft
+  S.F = qd3(qb); S.Uv = qd2(qb);
+  S.flex = Math.atan2(dot(f, S.Uv), dot(f, S.F));
+}
+
 const S = {};
 let cfg = { mode: 'lesion', diff: 'guided', seed: 1, target: 'random' };
 let path = [];
@@ -578,14 +904,18 @@ let mouseDX = 0, mouseDY = 0, wheel = 0;
 
 function resetState() {
   Object.assign(S, {
-    state: 'playing', pos: [0, 98, 0], F: [0, -1, 0], Uv: [0, 0, 1], R: [-1, 0, 0],
-    vel: 0, flex: 0, flexLimited: false, yawV: 0, pitchV: 0, rollV: 0, t: 0,
+    state: 'playing', ins: INS_MIN, roll: 0, insV: 0, kbLever: 0, flexCmd: 0,
+    vel: 0, flex: 0, flexLimited: false, resist: false, rollV: 0, t: 0,
     blood: 0, peakBlood: 0, contacts: 0, contactCD: 0, dragDist: 0, flash: 0, drops: [], visited: new Set(),
     reached: false, seen: false, cur: null, curH: 0, endTimer: -1, nav: cfg.diff === 'guided'
   });
-  S.R = cross(S.F, S.Uv);
+  rod.P = []; rod.P0 = []; rod.Q = []; rod.nb = [];
+  for (let i = 0; i <= NSEG; i++) { rod.P.push([0, 0, 0]); rod.P0.push([0, 0, 0]); rod.nb.push(B[0]); if (i < NSEG) rod.Q.push(Q_BASE.slice()); }
+  rod.nd = Math.floor(S.ins / SEG - 1e-9) + 1;
+  rodOutside();
+  for (let i = 0; i < rod.nd; i++) { rod.P[i] = [GLOTTIS[0], GLOTTIS[1] + i * SEG - S.ins, GLOTTIS[2]]; }
+  syncCamera();
   mapCPU(S.pos, true); S.cur = nearestBr; S.curH = nearestH;
-  setView();
 }
 
 function placeTumor() {
@@ -634,7 +964,7 @@ function buildObjectives() {
 
 // ---------- wall contact & bleeding ----------
 function contact(onTumor, drag) {
-  S.contacts++; S.contactCD = 0.7; S.vel *= drag ? 0.6 : 0.15; S.flash = 1;
+  S.contacts++; S.contactCD = 0.7; S.flash = 1;
   Remote.send({ t: 'buzz', ms: onTumor ? 120 : 60 });
   S.blood = Math.min(1, S.blood + (onTumor ? 0.14 : 0.045));
   if (S.blood > 0.12 || onTumor) addDrops(onTumor ? 4 : 2);
@@ -649,44 +979,6 @@ function addDrops(n) {
   if (S.drops.length > 40) S.drops.splice(0, S.drops.length - 40);
 }
 
-// ---------- physical limits on scope orientation ----------
-// Directions the airway allows the shaft to lie along here: the current branch, plus its parent near
-// the proximal end and its children near the distal end (so turning into a branch is smooth).
-function airwayAxes() {
-  const b = S.cur; if (!b) return [[0, -1, 0]];
-  const ax = [b.dir];
-  if (b.parent && S.curH < 0.45) ax.push(b.parent.dir);
-  if (S.curH > 0.55) for (const c of b.children) ax.push(c.dir);
-  return ax;
-}
-function offAxis(v, axes) {
-  let best = -2, bax = axes[0];
-  for (const a of axes) { const d = dot(v, a); if (d > best) { best = d; bax = a; } }
-  return [Math.acos(clamp(best, -1, 1)), bax];
-}
-function rotateFrameTo(newF) { // minimal rotation of the shaft frame so that F = newF
-  const ax = cross(S.F, newF), sn = len(ax);
-  if (sn < 1e-7) return;
-  const k = mul(ax, 1 / sn), a = Math.atan2(sn, dot(S.F, newF));
-  S.F = norm(newF); S.Uv = norm(rot(S.Uv, k, a));
-  S.R = norm(cross(S.F, S.Uv)); S.Uv = norm(cross(S.R, S.F));
-}
-function clampShaft() {
-  const [ang, ax] = offAxis(S.F, airwayAxes());
-  if (ang <= SHAFT_LIMIT) return;
-  let pp = sub(S.F, mul(ax, dot(S.F, ax)));
-  pp = len(pp) < 1e-5 ? S.Uv : norm(pp);
-  rotateFrameTo(norm(add(mul(ax, Math.cos(SHAFT_LIMIT)), mul(pp, Math.sin(SHAFT_LIMIT)))));
-}
-function allowedFlex(target) { // largest flex toward target that keeps the tip from facing back up the airway
-  const axes = airwayAxes();
-  const ok = f => offAxis(norm(rot(S.F, S.R, f)), axes)[0] <= VIEW_LIMIT;
-  if (ok(target)) return target;
-  let lo = 0, hi = target;
-  for (let i = 0; i < 12; i++) { const m = (lo + hi) / 2; if (ok(m)) lo = m; else hi = m; }
-  return lo;
-}
-
 addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
@@ -694,6 +986,7 @@ addEventListener('keydown', e => {
   if (S.state !== 'playing') return;
   if (e.code === 'KeyN') { S.nav = !S.nav; toast(`Nav guide ${S.nav ? 'on' : 'off'}`); }
   if (e.code === 'KeyV') { mapView = 1 - mapView; }
+  if (e.code === 'KeyC') { S.kbLever = 0; }
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -710,67 +1003,43 @@ function update(dt) {
   if (S.state !== 'playing') return;
   S.t += dt;
   const fine = keys.ShiftLeft || keys.ShiftRight ? 0.35 : 1;
-  // steering the shaft (keyboard / mouse) and rotation (keys or phone twist)
-  const ty = ((keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0)) * 1.3 * fine;
-  const tp = ((keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0)) * 1.3 * fine;
-  const tr = ((keys.KeyE ? 1 : 0) - (keys.KeyQ ? 1 : 0)) * 1.6 * fine;
-  const k = Math.min(1, dt * 10);
-  S.yawV += (ty - S.yawV) * k; S.pitchV += (tp - S.pitchV) * k; S.rollV += (tr - S.rollV) * k;
-  let yaw = S.yawV * dt + mouseDX * 0.0022 * fine, pitch = S.pitchV * dt - mouseDY * 0.0022 * fine, roll = S.rollV * dt;
-  mouseDX = mouseDY = 0;
-  roll += Remote.rollAcc; Remote.rollAcc = 0;   // phone twist → scope rotation (1:1)
-  if (yaw) { S.F = norm(rot(S.F, S.Uv, -yaw)); S.R = norm(cross(S.F, S.Uv)); }
-  if (pitch) { S.F = norm(rot(S.F, S.R, pitch)); S.Uv = norm(cross(S.R, S.F)); }
-  if (roll) { S.Uv = norm(rot(S.Uv, S.F, roll)); S.R = norm(cross(S.F, S.Uv)); }
-  S.Uv = norm(cross(S.R, S.F)); S.R = norm(cross(S.F, S.Uv));
-  clampShaft();
-  // tip flexion: phone lever POSITION maps linearly to a deflection angle (holding still = fixed angle),
-  // limited only where the airway physically stops the tip from bending further
-  const flexWanted = Remote.connected ? Remote.pitch * MAX_FLEX : 0;
-  const flexT = allowedFlex(flexWanted);
-  S.flexLimited = Math.abs(flexWanted - flexT) > 0.05;
-  S.flex += (flexT - S.flex) * Math.min(1, dt * 14);
-  setView();
-
-  // advance / withdraw
-  const prevPos = S.pos;
+  // rotation is applied at the handle (keys, mouse ↔ or phone twist 1:1) and carried to the tip by the rod
+  const tr = ((keys.KeyE || keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyQ || keys.KeyA || keys.ArrowLeft ? 1 : 0)) * 1.6 * fine;
+  S.rollV += (tr - S.rollV) * Math.min(1, dt * 10);
+  const roll = S.rollV * dt + mouseDX * 0.003 * fine + Remote.rollAcc;
+  mouseDX = 0; Remote.rollAcc = 0;
+  // tip lever: its POSITION is the commanded tip angle (phone thumb, or ↑↓ / mouse ↕ which stay where left)
+  S.kbLever = clamp(S.kbLever + ((keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0)) * 1.1 * fine * dt - mouseDY * 0.004 * fine, -1, 1);
+  mouseDY = 0;
+  const lever = Remote.connected ? Remote.pitch : S.kbLever;
+  const flexT = lever >= 0 ? lever * FLEX_UP : lever * FLEX_DOWN;
+  S.flexCmd += (flexT - S.flexCmd) * Math.min(1, dt * 12);
+  // insertion at the mouth
   const tv = ((keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0)) * 16 * fine + wheel * 22;
   wheel *= Math.pow(0.02, dt);
-  S.vel += (tv - S.vel) * Math.min(1, dt * 6);
-  S.pos = add(S.pos, mul(S.vF, S.vel * dt));   // the tip leads
-  if (S.vel > 0 && Math.abs(S.flex) > 1e-3) {  // shaft follows the bent tip only while advancing
-    const a = S.flex * Math.min(1, S.vel * dt * 0.07);
-    S.F = norm(rot(S.F, S.R, a)); S.Uv = norm(cross(S.R, S.F));
-  }
+  S.insV += (tv - S.insV) * Math.min(1, dt * 6);
+  const prevPos = S.pos;
+  rodStep(dt, S.insV * dt, roll, S.flexCmd);
+  const step = sub(S.pos, prevPos), moved = len(step);
+  S.vel += (dot(step, S.vF) / Math.max(dt, 1e-3) - S.vel) * Math.min(1, dt * 8);
+  S.flexLimited = Math.abs(S.flexCmd - S.flex) > 0.2;
+  S.resist = rod.blocked && S.insV > 1;
 
-  // collision with airway wall
+  // wall contact at the tip: a hard bump (tip driven into the wall) or scraping along it
   S.contactCD -= dt;
-  let pressed = false;
-  for (let it = 0; it < 3; it++) {
-    const d = -mapCPU(S.pos);
-    if (d >= RS) break;
-    const g = gradCPU(S.pos), pen = RS - d;
-    if (pen > 0.03) pressed = true;
-    if (it === 0 && pen > 0.3 && S.vel > 3 && S.contactCD <= 0) contact(tumor && tumorD(S.pos) < RS + 0.6);
-    S.pos = sub(S.pos, mul(g, pen));
-  }
-  // dragging the tip along the wall: every few mm of travel while touching counts as a contact
-  const moved = len(sub(S.pos, prevPos));
-  if (pressed && moved > 0.01) {
+  const pressRate = rod.press / Math.max(dt, 1e-3);   // mm/s of tip motion the wall had to stop
+  const onTumor = () => tumor && tumorD(S.pos) < RS + 0.6;
+  const pressing = pressRate > 0.6;
+  if (pressRate > 9 && !S.wasPressing && S.contactCD <= 0) contact(onTumor());   // a hit, not a steady lean
+  S.wasPressing = pressing;
+  if (pressing && moved > 6 * dt) {   // actually sliding along the wall (> 6 mm/s)
     S.dragDist += moved;
-    if (S.dragDist > 3 && S.contactCD <= 0) { S.dragDist = 0; contact(tumor && tumorD(S.pos) < RS + 0.6, true); }
+    if (S.dragDist > 3 && S.contactCD <= 0) { S.dragDist = 0; contact(onTumor(), true); }
   } else S.dragDist = Math.max(0, S.dragDist - dt * 4);
-  if (S.nav) { // gentle wall-avoidance assist
-    const d = -mapCPU(S.pos);
-    if (d < RS * 2.2) S.pos = sub(S.pos, mul(gradCPU(S.pos), (RS * 2.2 - d) * dt * 1.4));
-  }
 
   // where are we?
   mapCPU(S.pos, true);
   S.cur = nearestBr; S.curH = nearestH;
-  clampShaft();
-  S.flex = allowedFlex(S.flex);
-  setView();
   if (S.cur.seg && (S.cur.level >= 2 || S.curH > 0.35) && !S.visited.has(S.cur.seg)) {
     S.visited.add(S.cur.seg);
     log(`Entered ${S.cur.seg}`, 'g');
@@ -891,11 +1160,12 @@ function drawOverlay() {
   // corner text like a video processor
   c.fillStyle = 'rgba(200,215,230,.7)'; c.font = `${11 * dpr}px ui-monospace,Menlo,monospace`; c.textAlign = 'left';
   c.fillText(`BF-SIM   ${fmtT(S.t)}`, 14 * dpr, 22 * dpr);
-  c.fillText(`ADV ${S.vel >= 0 ? '+' : ''}${S.vel.toFixed(1)} mm/s`, 14 * dpr, 38 * dpr);
-  const fd = Math.round(S.flex * 180 / Math.PI);
-  c.fillText(`TIP ${fd > 0 ? '▲' : fd < 0 ? '▼' : '·'} ${Math.abs(fd)}°`, 14 * dpr, 54 * dpr);
-  c.textAlign = 'right';
-  if (S.flexLimited) { c.fillStyle = '#ffb020'; c.fillText('TIP AGAINST WALL', w - 14 * dpr, 22 * dpr); }
+  c.fillText(`INS ${S.ins.toFixed(0)} mm  ${S.vel >= 0 ? '+' : ''}${S.vel.toFixed(1)} mm/s`, 14 * dpr, 38 * dpr);
+  const fd = Math.round(S.flex * 180 / Math.PI), fc = Math.round(S.flexCmd * 180 / Math.PI);
+  c.fillText(`TIP ${fd > 0 ? '▲' : fd < 0 ? '▼' : '·'} ${Math.abs(fd)}°  (lever ${fc > 0 ? '▲' : fc < 0 ? '▼' : '·'} ${Math.abs(fc)}°)`, 14 * dpr, 54 * dpr);
+  c.textAlign = 'right'; c.fillStyle = '#ffb020';
+  if (S.flexLimited) c.fillText('TIP AGAINST WALL', w - 14 * dpr, 22 * dpr);
+  if (S.resist) c.fillText('RESISTANCE — SCOPE WON’T ADVANCE', w - 14 * dpr, 38 * dpr);
   if (S.blood > 0.5 && S.state === 'playing') {
     c.textAlign = 'center'; c.fillStyle = `rgba(255,80,80,${0.6 + 0.4 * Math.sin(performance.now() / 150)})`;
     c.font = `bold ${14 * dpr}px ui-sans-serif,system-ui`; c.fillText('HEAVY BLEEDING', cx, cy - R * 0.85);
@@ -936,6 +1206,9 @@ function drawMinimap() {
     const [tx, ty] = P(tumor.c); c.fillStyle = '#ff5050';
     c.beginPath(); c.arc(tx, ty, Math.max(3 * dpr, tumor.r * s), 0, TAU); c.fill();
   }
+  c.strokeStyle = 'rgba(255,224,102,.55)'; c.lineWidth = Math.max(1.5 * dpr, RS * 2 * s); c.beginPath();  // the scope shaft
+  for (let i = 0; i <= rod.nd; i++) { const [x, y] = P(rod.P[i]); i ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.stroke();
   const [px, py] = P(S.pos), [fx, fy] = P(add(S.pos, mul(S.vF, 12)));
   c.strokeStyle = '#ffe066'; c.lineWidth = 2 * dpr; c.beginPath(); c.moveTo(px, py); c.lineTo(fx, fy); c.stroke();
   c.fillStyle = '#ffe066'; c.beginPath(); c.arc(px, py, 4 * dpr, 0, TAU); c.fill();
